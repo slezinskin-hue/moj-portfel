@@ -1,0 +1,2 @@
+# Tylko do testow (klient HTTP dla testow API - fastapi.testclient). Aplikacja i instalator go nie potrzebuja.
+httpx==0.28.1

@@ -10,12 +10,14 @@ jobs:
   testy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Biblioteki (dokladne wersje)
-        run: pip install --no-deps -r requirements-lock.txt
+        run: |
+          pip install --no-deps -r requirements-lock.txt
+          pip install -r requirements-test.txt
       - name: Testy
         run: >
           python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits
