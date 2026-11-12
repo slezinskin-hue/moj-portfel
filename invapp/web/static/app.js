@@ -135,7 +135,8 @@
   let main = null, under = null;
   const MODES = {
     value: {series: () => [{key: 'value', label: 'Wartość portfela', color: 'var(--c1)', area: true}, {key: 'invested_net', label: 'Wpłaty netto', color: 'var(--c2)', width: 2}]
-      .concat(S.hist && S.hist.series.some(p => Number(p.deposits)) ? [{key: 'deposits', label: 'w tym lokaty', color: 'var(--c3)', width: 1.5, dash: true}] : []), fmt: zl0},
+      .concat(S.hist && S.hist.series.some(p => Number(p.deposits)) ? [{key: 'securities', label: 'w tym papiery', color: 'var(--c4)', width: 1.5},
+                                                                       {key: 'deposits', label: 'w tym lokaty (gotówka)', color: 'var(--c3)', width: 1.5}] : []), fmt: zl0},
     gain: {series: () => [{key: 'gain', label: 'Zysk (wartość − wpłaty netto)', color: 'var(--c4)', signed: true}], fmt: zl0},
     twr: {series: () => [{key: 'twr', label: 'Zwrot TWR od początku', color: 'var(--c3)', signed: true}], fmt: v => pct(v, Math.abs(v) < 0.1 ? 1 : 0)},
   };
@@ -151,7 +152,7 @@
   function tipMain(p) {
     const r = (c, l, v) => `<div class="r"><span><span class="sw" style="background:${c}"></span>${l}</span><b>${v}</b></div>`;
     let h = '<b>' + Charts.fmtDate(p.t) + '</b>';
-    if (S.mode === 'value') h += r('var(--c1)', 'Wartość', zl(p.value)) + (p.deposits ? r('var(--c3)', '· papiery', zl(p.securities)) + r('var(--c3)', '· lokaty', zl(p.deposits)) : '') + r('var(--c2)', 'Wpłaty netto', zl(p.invested_net));
+    if (S.mode === 'value') h += r('var(--c1)', 'Wartość', zl(p.value)) + (p.deposits ? r('var(--c4)', '· papiery', zl(p.securities)) + r('var(--c3)', '· lokaty', zl(p.deposits)) : '') + r('var(--c2)', 'Wpłaty netto', zl(p.invested_net));
     h += r(p.gain >= 0 ? 'var(--pos)' : 'var(--neg)', 'Zysk', zlS(p.gain));
     if (p.twr !== null) h += r('var(--c3)', 'Zwrot TWR', pct(p.twr));
     h += `<div class="r muted"><span>pozycji</span><span>${p.positions}${p.est ? ' (oszac. ' + p.est + ')' : ''}</span></div>`;
