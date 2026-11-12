@@ -282,7 +282,8 @@ def main():
     try:
         import uvicorn
         from invapp.web.app import app
-        server = uvicorn.Server(uvicorn.Config(app, host=config.HOST, port=port, log_level="warning", log_config=None))
+        # timeout_graceful_shutdown: zamkniecie nie czeka w nieskonczonosc na otwarte polaczenia karty przegladarki (aktualizacja/deinstalacja nie utknie)
+        server = uvicorn.Server(uvicorn.Config(app, host=config.HOST, port=port, log_level="warning", log_config=None, timeout_graceful_shutdown=10))
         app.state.server = server                  # /api/zamknij: czyste zatrzymanie z okna, przegladarki albo z instalatora
         state_file().write_text(json.dumps({"port": port, "pid": os.getpid(), "wersja": __version__, "tryb": mode}), encoding="utf-8")
         try:
