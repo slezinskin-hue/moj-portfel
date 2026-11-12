@@ -170,6 +170,22 @@ async def api_import_remove(batch_id: int, request: Request):
     return JSONResponse(_jsonable(res))
 
 
+@app.post("/api/konto/{account_id}/usun")
+async def api_account_remove(account_id: int, request: Request):
+    """Usuniecie calego portfela (konta): wszystkie jego wczytane pliki, stan jak bez nich. Przed zmiana - kopia zapasowa bazy."""
+    if not _same_origin(request):
+        return JSONResponse({"blad": "niedozwolone zadanie"}, status_code=403)
+    try:
+        res = await run_in_threadpool(importing.remove_account, account_id)
+    except ImportFailed as e:
+        return JSONResponse({"blad": str(e)}, status_code=422)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"blad": f"Nie udało się usunąć portfela ({type(e).__name__}); nic nie zostało zmienione."}, status_code=500)
+    preview.invalidate_caches()
+    importing.start_background_pricing()
+    return JSONResponse(_jsonable(res))
+
+
 @app.get("/api/import/status")
 def api_import_status():
     with importing._state_lock:

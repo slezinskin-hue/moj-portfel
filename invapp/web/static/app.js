@@ -357,6 +357,8 @@
           '<div class="acts">' + q.odpowiedzi.map((o, i) => `<button class="btn ${i === 0 ? 'primary' : ''}" data-a="${esc(o.wartosc)}" ${o.opis ? 'title="' + esc(o.opis) + '"' : ''}>${esc(o.etykieta)}</button>`).join('') + '</div>' +
           q.odpowiedzi.filter(o => o.opis).map(o => `<p class="muted small"><b>${esc(o.etykieta)}:</b> ${esc(o.opis)}</p>`).join('');
         c.querySelectorAll('button').forEach(b => b.onclick = async () => {
+          const opt = q.odpowiedzi.find(o => o.wartosc === b.dataset.a);
+          if (opt && opt.potwierdz && !confirm(opt.potwierdz)) return;
           const pola = {}; c.querySelectorAll('input').forEach(i => pola[i.name] = i.value);
           b.disabled = true;
           const r = await fetch(`/api/pytania/${q.broker}/${q.id}`, {method: 'POST', headers: {'X-Requested-With': 'invapp', 'Content-Type': 'application/json'}, body: JSON.stringify({odpowiedz: b.dataset.a, pola})});
@@ -640,10 +642,20 @@
     b.disabled = true; b.textContent = 'Usuwam…';
     try {
       const r = await fetch(`/api/import/${b.dataset.id}/usun`, {method: 'POST', headers: {'X-Requested-With': 'invapp'}}), d = await r.json();
-      if (!r.ok) { toast(d.blad || 'Nie udało się usunąć pliku'); b.disabled = false; b.textContent = 'Usuń'; return; }
+      if (!r.ok) { toast(d.blad || 'Nie udało się usunąć pliku'); b.disabled = false; b.textContent = 'Usuń plik'; return; }
       toast(`Usunięto: ${d.usuniete_operacje} operacji` + (d.usuniete_konta.length ? `, konta: ${d.usuniete_konta.join(', ')}` : '') + '.');
       setTimeout(() => location.reload(), 900);
-    } catch (e) { toast('Brak połączenia z aplikacją'); b.disabled = false; b.textContent = 'Usuń'; }
+    } catch (e) { toast('Brak połączenia z aplikacją'); b.disabled = false; b.textContent = 'Usuń plik'; }
+  });
+  // usuniecie calego portfela (konta): wszystkie jego pliki, stan jak bez nich (kopia zapasowa przed)
+  $$('.del-account').forEach(b => b.onclick = async () => {
+    if (!confirm(`Usunąć cały portfel „${b.dataset.name}” (${b.dataset.files} plik/ów)?\n\nZnikną wszystkie operacje, pozycje, dochody i decyzje tego konta – portfel przestanie być śledzony. Przed usunięciem zrobię kopię zapasową bazy. Pliki możesz później wczytać ponownie.`)) return;
+    b.disabled = true; b.textContent = 'Usuwam…';
+    try {
+      const d = await post(`/api/konto/${b.dataset.id}/usun`);
+      toast(`Usunięto portfel „${d.konto}”: ${d.usuniete_pliki.length} plików, ${d.usuniete_operacje} operacji.`);
+      setTimeout(() => location.href = '/podglad', 1100);
+    } catch (e) { toast(e.message); b.disabled = false; b.textContent = 'Usuń cały portfel'; }
   });
 
   // ---------------------------------------------------------------- status zadania w tle (ceny, historia)

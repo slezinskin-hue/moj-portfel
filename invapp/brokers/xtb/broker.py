@@ -230,7 +230,9 @@ class Xtb(Broker):
                                         "opis": "Aplikacja przyjmie split: dzień podziału z danych Yahoo (jeśli są), a gdy ich brak – granica z Twoich transakcji. "
                                                 "Oznaczy go jako niesprawdzony oficjalnym źródłem."},
                                        {"wartosc": "tak", "etykieta": f"Potwierdzam split {k}:1 (podaję dzień i źródło)"},
-                                       {"wartosc": "nie", "etykieta": "To nie był split", "bez_pol": True}]})
+                                       {"wartosc": "nie", "etykieta": "To nie był split", "bez_pol": True,
+                                        "potwierdz": "Na pewno to nie był podział akcji? Ujemny stan zostanie, a kontrola liczb pokaże uwagę. "
+                                                     "Decyzję zmienisz później przyciskiem w „Kontroli liczb”."}]})
         return out
 
     split_provider = None                                     # podmieniane w testach (bez internetu)
@@ -320,7 +322,83 @@ class Xtb(Broker):
                             "odpowiedzi": [{"wartosc": "tak", "etykieta": f"Tak, w {ccy}"}, {"wartosc": "nie", "etykieta": "Nie wiem / nie"}]})
         return out
 
+    # ---- rozwiazanie ujemnego stanu z kontroli liczb (decyzja uzytkownika 2026-11-12: "ma byc opcja resolve - aplikacja zaklada split
+    #      i przelicza tak, zeby sie wszystko zgadzalo"): split wynikajacy z danych, takze gdy wczesniej odpowiedziano "to nie byl split"
+    def split_evidence(self, cur, listing_id):
+        """Pozycje XTB (Position ID) tego notowania zamkniete w ilosci k x kupiona: {k, cutoff, positions}, gdy wszystkie takie pozycje
+        maja ten sam calkowity iloraz k >= 2 (jak przy tworzeniu hipotezy w imporcie); inaczej None (dane nie wskazuja splitu)."""
+        from decimal import Decimal
+        cur.execute("""select b.broker_position_ref, b.volume, b.closed_at,
+                              (select sum(t.quantity) from transactions t where t.txn_type = 'BUY' and t.status = 'ACTIVE'
+                                 and t.account_id = b.account_id and t.broker_position_ref = b.broker_position_ref)
+                       from broker_closed_positions b where b.listing_id = %s and b.close_origin is distinct from 'Correction'""", (listing_id,))
+        items = []
+        for ref, vol, closed, bought in cur.fetchall():
+            if bought and bought > 0:
+                r = Decimal(vol) / Decimal(bought)
+                if r >= 2 and abs(r - r.to_integral_value()) < Decimal("0.0001"):
+                    items.append((int(r.to_integral_value()), ref, vol, bought, closed))
+        ks = {i[0] for i in items}
+        if len(ks) != 1:
+            return None
+        return {"k": ks.pop(), "cutoff": min(i[4] for i in items),
+                "positions": [{"position": str(i[1]), "closed_volume": str(i[2]), "bought_quantity": str(i[3])} for i in items]}
+
+    def negative_state_fix(self, cur, listing_id):
+        """Dla diagnozy kontroli liczb: propozycja przyjecia splitu wynikajacego z danych (jedno klikniecie) albo None."""
+        ev = self.split_evidence(cur, listing_id)
+        if not ev:
+            return None
+        cur.execute("""select status from corporate_actions where listing_id = %s and action_type = 'SPLIT' and ratio_new = %s and ratio_old = 1
+                       order by action_id desc limit 1""", (listing_id, ev["k"]))
+        r = cur.fetchone()
+        if r and r[0] == "CONFIRMED":
+            return None
+        return {"broker": self.key, "pytanie": f"xtb-resolve-split-{listing_id}", "odpowiedz": "auto", "k": ev["k"], "pozycje": len(ev["positions"]),
+                "odrzucony": bool(r and r[0] == "REJECTED")}
+
+    def _resolve_split(self, conn, listing_id):
+        from psycopg2.extras import Json
+        cur = conn.cursor()
+        ev = self.split_evidence(cur, listing_id)
+        if not ev:
+            raise ImportFailed("Dane nie wskazują jednoznacznie podziału akcji – najpewniej brakuje pliku eksportu ze starszymi zakupami.")
+        k = ev["k"]
+        cur.execute("""select action_id, status from corporate_actions where listing_id = %s and action_type = 'SPLIT' and ratio_new = %s and ratio_old = 1
+                       order by action_id desc limit 1""", (listing_id, k))
+        row = cur.fetchone()
+        now = datetime.now(timezone.utc).isoformat()
+        if row and row[1] == "CONFIRMED":
+            raise ImportFailed("Ten podział akcji jest już przyjęty.")
+        if row:                                                   # hipoteza z importu albo wczesniej odrzucona - wraca jako hipoteza, potem decyzja "za mnie"
+            aid, status = row
+            cur.execute("select evidence from corporate_actions where action_id = %s", (aid,))
+            evd = cur.fetchone()[0] or {}
+            hist = list(evd.get("history", [])) + [{"at": now, "from": status, "to": "HYPOTHESIS",
+                                                   "by": "użytkownik: rozwiąż z kontroli liczb" + (" (zmiana wcześniejszej decyzji „to nie był split”)" if status == "REJECTED" else "")}]
+            cur.execute("""update corporate_actions set status = 'HYPOTHESIS', applies_to_lots_opened_before = coalesce(applies_to_lots_opened_before, %s),
+                                  evidence = evidence || %s where action_id = %s""", (ev["cutoff"], Json({"history": hist}), aid))
+        else:
+            cur.execute("""insert into corporate_actions(listing_id,action_type,effective_date,effective_date_status,applies_to_lots_opened_before,ratio_new,ratio_old,source,status,evidence)
+                           values (%s,'SPLIT',NULL,'UNKNOWN',%s,%s,1,'INFERRED','HYPOTHESIS',%s) returning action_id""",
+                        (listing_id, ev["cutoff"], k, Json({"pattern": "ilość zamknięta = k × ilość kupiona (wg pozycji XTB)", "ratio": k, "positions": ev["positions"],
+                                                             "history": [{"at": now, "to": "HYPOTHESIS", "by": "użytkownik: rozwiąż z kontroli liczb"}]})))
+            aid = cur.fetchone()[0]
+        cur.execute("select min(broker_symbol) from listing_aliases where listing_id = %s and valid_to is null", (listing_id,))
+        symbol = cur.fetchone()[0]
+        cur.execute("select applies_to_lots_opened_before, evidence from corporate_actions where action_id = %s", (aid,))
+        cutoff, evd = cur.fetchone()
+        return self._auto_split(conn, aid, symbol, k, cutoff, evd)
+
     def answer_question(self, conn, question_id, answer, fields=None):
+        if question_id.startswith("xtb-resolve-split-"):
+            try:
+                listing_id = int(question_id.rsplit("-", 1)[-1])
+            except ValueError:
+                raise ImportFailed("Nieznane pytanie.")
+            if answer != "auto":
+                raise ImportFailed("Nieznana odpowiedź.")
+            return self._resolve_split(conn, listing_id)
         if question_id.startswith("xtb-split-"):
             try:
                 aid = int(question_id.rsplit("-", 1)[-1])

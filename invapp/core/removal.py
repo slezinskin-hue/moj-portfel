@@ -46,6 +46,31 @@ def remove_batch(conn, batch_id):
     return summary
 
 
+def account_batches(cur, account_id):
+    """(nazwa konta, wczytane pliki konta - najnowsze najpierw); blad, gdy konta nie ma albo nie ma plikow."""
+    cur.execute("select display_name from accounts where account_id = %s", (account_id,))
+    row = cur.fetchone()
+    if not row:
+        raise ImportFailed("Nie ma takiego konta.")
+    batches = _ids(cur, "select batch_id from import_batches where account_id = %s and status = 'COMMITTED' order by batch_id desc", (account_id,))
+    if not batches:
+        raise ImportFailed("To konto nie ma wczytanych plików.")
+    return row[0], batches
+
+
+def remove_account(conn, account_id):
+    """Usuwa caly portfel (konto): wszystkie jego pliki po kolei mechanizmem remove_batch - stan jak gdyby zadnego z nich nie wczytano.
+    Bez commitu (robi go wywolujacy). Dane innych kont (takze z tego samego brokera) zostaja."""
+    cur = conn.cursor()
+    name, batches = account_batches(cur, account_id)
+    ops, accounts, files = 0, set(), []
+    for b in batches:
+        res = remove_batch(conn, b)
+        ops += res["usuniete_operacje"]; accounts |= set(res["usuniete_konta"]); files.append(res["plik"])
+    cur.execute("select count(*) from transactions where account_id = %s", (account_id,))
+    return {"konto": name, "usuniete_pliki": files, "usuniete_operacje": ops, "usuniete_konta": sorted(accounts), "pozostale_operacje_konta": cur.fetchone()[0]}
+
+
 def _remove(cur, conn, batch_id, code, broker_id, others):
     accounts_before = _ids(cur, "select account_id from accounts where broker_id = %s", (broker_id,))
     # 1. operacje tylko z tego pliku (bez wsparcia w surowych wierszach innych plikow)

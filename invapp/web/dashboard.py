@@ -71,8 +71,10 @@ def load(scope_key="all"):
                                       f.code as broker
                                from import_batches b join financial_institutions f using (broker_id) where f.code = any(%s) order by b.batch_id""", (list(_brokers_of(scope_key)),))
         data["empty"] = not q("select 1 from import_batches limit 1")
-        data["all_batches"] = q("""select b.batch_id, b.source_file_name, b.rows_inserted, b.rows_duplicate, b.started_at, f.name as broker
-                                   from import_batches b join financial_institutions f using (broker_id) where b.status = 'COMMITTED' order by b.batch_id desc""")
+        data["all_batches"] = q("""select b.batch_id, b.source_file_name, b.rows_inserted, b.rows_duplicate, b.started_at, f.name as broker,
+                                          b.account_id, coalesce(a.display_name, f.name) as account
+                                   from import_batches b join financial_institutions f using (broker_id) left join accounts a on a.account_id = b.account_id
+                                   where b.status = 'COMMITTED' order by coalesce(a.display_name, f.name), b.batch_id desc""")
         summ = {r["scope_code"]: r for r in q("select scope_code, has_data, positions from v_scope_summary")}
         data["tabs"] = [{"key": k, "title": t, "has_data": bool(summ.get(c, {}).get("has_data"))} for k, (c, t) in SCOPES.items()]
         data["has_data"] = bool(summ.get(code, {}).get("has_data"))

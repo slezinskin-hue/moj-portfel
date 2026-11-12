@@ -67,19 +67,46 @@ def _missing_prices(cur, check, questions, accounts):
     return " ".join(reasons) or "Część pozycji nie ma jeszcze ceny rynkowej.", acts
 
 
+def _broker_fixes(cur, listing_id):
+    """Propozycje brokerow dla ujemnego stanu notowania (np. XTB: split wynikajacy z pozycji, takze wczesniej odrzucony)."""
+    from invapp import brokers
+    out = []
+    for b in brokers.BROKERS:
+        fn = getattr(b, "negative_state_fix", None)
+        if fn:
+            fix = fn(cur, listing_id)
+            if fix:
+                out.append(fix)
+    return out
+
+
 def _negative(cur, questions, accounts):
-    cur.execute("""select (select min(la.broker_symbol) from listing_aliases la where la.listing_id = x.listing_id and la.valid_to is null), x.b, coalesce(y.s, 0)
+    cur.execute("""select x.listing_id, (select min(la.broker_symbol) from listing_aliases la where la.listing_id = x.listing_id and la.valid_to is null), x.b, coalesce(y.s, 0)
                    from (select account_id, listing_id, sum(qty_initial) b from derived_lots where account_id = any(%s) group by 1, 2) x
                    left join (select account_id, listing_id, sum(quantity) s from transactions where txn_type = 'SELL' and status = 'ACTIVE' group by 1, 2) y using (account_id, listing_id)
                    where x.b - coalesce(y.s, 0) < -0.0000001""", (accounts,))
     rows = cur.fetchall()
-    syms = sorted({r[0] for r in rows if r[0]})
+    syms = sorted({r[1] for r in rows if r[1]})
     acts = _split_actions(questions, syms)
     if acts:
         return (f"Sprzedano więcej {', '.join(syms)}, niż kupiono – iloraz ilości wskazuje na podział akcji (split), którego broker nie pokazał w eksporcie. "
                 "Po potwierdzeniu splitu ilości z zakupów zostaną przeliczone (bez zmiany zapłaconych kwot)."), acts
-    return (f"Sprzedaż {', '.join(syms) or 'papierów'} bez odpowiadającego zakupu w danych – zwykle brakuje starszego pliku eksportu (innego konta albo okresu). "
-            "Wczytaj eksport obejmujący cały okres od pierwszego zakupu."), [_act(IMPORT, "Wczytaj brakujący eksport")]
+    reasons, rest = [], []
+    for lid, sym, bought, sold in rows:
+        fixes = _broker_fixes(cur, lid)
+        if not fixes:
+            rest.append(sym)
+            continue
+        f = fixes[0]
+        reasons.append(f"{sym}: w {f['pozycje']} poz. sprzedano dokładnie {f['k']}× więcej akcji, niż kupiono – to podział akcji (split) {f['k']}:1, którego broker "
+                       f"nie pokazał w eksporcie" + (" (wcześniej oznaczony jako „to nie był split”)" if f["odrzucony"] else "") +
+                       ". Po przyjęciu splitu ilości z zakupów zostaną przeliczone ×" + str(f["k"]) + " (cena ÷" + str(f["k"]) + "); zapłacone kwoty i koszt się nie zmieniają.")
+        acts.append(_act(ANSWER, f"Przyjmij split {sym} {f['k']}:1 i przelicz", broker=f["broker"], pytanie=f["pytanie"], odpowiedz=f["odpowiedz"]))
+    if rest:
+        reasons.append(f"Sprzedaż {', '.join(rest)} bez odpowiadającego zakupu w danych i bez śladu podziału akcji – zwykle brakuje starszego pliku eksportu "
+                       "(innego konta albo okresu). Wczytaj eksport obejmujący cały okres od pierwszego zakupu.")
+        acts.append(_act(IMPORT, "Wczytaj brakujący eksport"))
+    return " ".join(reasons), acts
 
 
 def _qty_vs_report(cur, questions, accounts):

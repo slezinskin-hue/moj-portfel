@@ -182,6 +182,9 @@ html, body { overflow-x: clip; }
 .helps { font-size: .85rem; color: var(--ink2); padding-left: 18px; }
 .res { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-top: 10px; font-size: .86rem; }
 .files { display: grid; gap: 6px; }
+.accgrp { border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin-bottom: 10px; background: var(--card2); }
+.acch { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.accgrp .frow { background: var(--card); }
 .frow { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
 .frow > div { flex: 1; } .fname { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; }
 .progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 8px 0 4px; }

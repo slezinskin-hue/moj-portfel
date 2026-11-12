@@ -156,6 +156,23 @@ class TestRepeatedImports(tm.Base):
             self.cur.execute("update transactions set occurred_at = occurred_at + interval '1 second'")      # rdzen ksiegi znowu chroniony wyzwalaczem
         self.cur.execute("rollback to savepoint s")
 
+    def test_remove_whole_portfolio_removes_all_its_files(self):
+        """Usun caly portfel (konto): wszystkie pliki konta znikaja, stan jak przed pierwszym importem; ponowny import dziala."""
+        from invapp.core import removal
+        from invapp.core.common import ImportFailed
+        self.imp(self.csv("styczen.csv", JAN)); self.imp(self.csv("luty.csv", JAN + FEB))
+        acc = self.one("select account_id from accounts")
+        self.assertEqual(self.one("select count(*) from import_batches where account_id = %s", (acc,)), 2)
+        res = removal.remove_account(tm._conn, acc)
+        self.assertEqual((sorted(res["usuniete_pliki"]), res["usuniete_operacje"], res["usuniete_konta"], res["pozostale_operacje_konta"]),
+                         (["luty.csv", "styczen.csv"], 6, ["Trade Republic"], 0))
+        for t in ("accounts", "transactions", "import_batches", "raw_rows", "derived_lots", "flow_classification"):
+            self.assertEqual(self.one(f"select count(*) from {t}"), 0, t)
+        with self.assertRaises(ImportFailed):
+            removal.remove_account(tm._conn, acc)                                  # konta juz nie ma
+        c = self.imp(self.csv("luty.csv", JAN + FEB))
+        self.assertEqual(c["INSERTED"], 6)
+
     def test_older_export_after_newer_adds_nothing(self):
         self.imp(self.csv("nowy.csv", JAN + FEB))
         ref = self.ledger()

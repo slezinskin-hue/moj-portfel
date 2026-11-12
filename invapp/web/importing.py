@@ -101,6 +101,30 @@ def remove_import(batch_id, make_backup=True):
         return res
 
 
+def remove_account(account_id, make_backup=True):
+    """Usuniecie calego portfela (konta), np. gdy uzytkownik nie chce go sledzic (decyzja 2026-11-12): wszystkie pliki tego konta usuwane
+    po kolei tym samym mechanizmem co pojedynczy plik (core/removal.py - stan jak bez tych plikow), w jednej transakcji, z kopia zapasowa przed."""
+    from invapp.core import removal
+    with _import_lock:
+        conn = owner_conn()
+        try:
+            removal.account_batches(conn.cursor(), account_id)          # najpierw sprawdzenie (czytelny blad bez kopii zapasowej)
+        finally:
+            conn.close()
+        if make_backup:
+            from invapp.db import backup
+            backup.create(label="przed-usunieciem-portfela")
+        conn = owner_conn()
+        try:
+            res = removal.remove_account(conn, account_id)
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+        finally:
+            conn.close()
+        return res
+
+
 # ---------------------------------------------------------------- pytania brokerow (np. waluta instrumentow .PL)
 def pending_questions(conn):
     out = []

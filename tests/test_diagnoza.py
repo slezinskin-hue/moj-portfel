@@ -54,6 +54,34 @@ class TestDiagnose(tm.Base):
         self.assertIn("CCC.PL", c["przyczyna"]); self.assertIn("nie zgaduje", c["przyczyna"])
         self.assertEqual((c["rozwiazania"][0]["akcja"], c["rozwiazania"][0]["odpowiedz"], c["rozwiazania"][0]["pytanie"]), ("odpowiedz", "tak", "xtb-currency-PL"))
 
+    def closed(self, l, ref, vol, bought, n):
+        self.cur.execute("""insert into transactions(account_id,broker_id,txn_type,occurred_at,cash_amount,cash_currency,external_id,external_id_scheme,
+                                                     dedup_key,source_kind,listing_id,quantity,price,price_currency,status,broker_position_ref)
+                            values (%s,%s,'BUY','2025-01-02T10:00Z',-100,'PLN',%s,'T',%s,'BROKER_IMPORT',%s,%s,%s,'PLN','ACTIVE',%s)""",
+                         (self.acc, self.xtb, f"B{n}", f"k:B:{n}", l, D(bought), D(100) / D(bought), ref))
+        self.cur.execute("""insert into broker_closed_positions(account_id,listing_id,broker_position_ref,volume,open_price,close_price,opened_at,closed_at,
+                                                                purchase_value,sale_value,profit_loss,close_origin,dedup_key,row_hash)
+                            values (%s,%s,%s,%s,1,1,'2025-01-02T10:00Z','2026-02-13T14:00Z',100,150,50,'Android',%s,repeat('a',64))""", (self.acc, l, ref, vol, f"k{n}"))
+
+    def test_split_evidence_from_positions_and_rejected_split_is_offered_again(self):
+        from invapp import brokers
+        x = brokers.by_code("XTB")
+        l = self.listing("EEE.PL", "PLN")
+        self.closed(l, "P1", 10, 1, 1); self.closed(l, "P2", 20, 2, 2)
+        ev = x.split_evidence(self.cur, l)
+        self.assertEqual((ev["k"], len(ev["positions"])), (10, 2))
+        fix = x.negative_state_fix(self.cur, l)
+        self.assertEqual((fix["pytanie"], fix["odpowiedz"], fix["odrzucony"]), (f"xtb-resolve-split-{l}", "auto", False))
+        self.cur.execute("""insert into corporate_actions(listing_id,action_type,effective_date,effective_date_status,applies_to_lots_opened_before,ratio_new,ratio_old,source,status,evidence)
+                            values (%s,'SPLIT',NULL,'UNKNOWN','2026-02-13T14:00Z',10,1,'INFERRED','REJECTED','{"r":1}')""", (l,))
+        self.assertTrue(x.negative_state_fix(self.cur, l)["odrzucony"])               # wczesniej "to nie byl split" - nadal do rozwiazania
+        self.cur.execute("update corporate_actions set status = 'CONFIRMED' where listing_id = %s", (l,))
+        self.assertIsNone(x.negative_state_fix(self.cur, l))                             # juz przyjety
+        m = self.listing("FFF.PL", "PLN")
+        self.closed(m, "P3", 10, 1, 3); self.closed(m, "P4", 15, 3, 4)                   # ilorazy 10 i 5: niespojne - to nie jest jednoznaczny split
+        self.assertIsNone(x.split_evidence(self.cur, m))
+        self.assertIsNone(x.negative_state_fix(self.cur, m))
+
     def test_other_checks_and_ok_untouched(self):
         out = self.run_checks([{"kontrola": "Zysk całkowity = zysk + dochody", "status": "BLAD"}, {"kontrola": "Lokata „TR”: model odtwarza wypłaty", "status": "OSTRZEZENIE"},
                                {"kontrola": "Inna", "status": "OK"}], [Q_DEP])
@@ -69,7 +97,7 @@ class TestFixApi(unittest.TestCase):
         from fastapi.testclient import TestClient
         from invapp.web.app import app
         c = TestClient(app, base_url="http://127.0.0.1")
-        for url in ("/api/ceny/odswiez", "/api/przelicz"):
+        for url in ("/api/ceny/odswiez", "/api/przelicz", "/api/konto/1/usun"):
             self.assertEqual(c.post(url).status_code, 403, url)
 
 
