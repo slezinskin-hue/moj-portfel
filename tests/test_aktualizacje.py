@@ -88,6 +88,20 @@ class TestStartMode(unittest.TestCase):
         from invapp.__main__ import ICON
         self.assertTrue(os.path.exists(ICON))                                                            # ikona okna jest w pakiecie programu
 
+    def test_running_other_version_is_replaced_same_version_is_shown(self):
+        from unittest import mock
+        import invapp.__main__ as m
+        calls = []
+        with mock.patch.object(m, "running_port", return_value=8000), mock.patch.object(m, "stop_running", lambda: calls.append("stop")), \
+             mock.patch.object(m, "show_running", lambda p, mode: calls.append(("show", p, mode))):
+            with mock.patch.object(m, "our_app_running", return_value=__version__):
+                self.assertTrue(m.handle_running("okno"))                     # ta sama wersja: tylko pokaz
+            with mock.patch.object(m, "our_app_running", return_value="0.0.1"):
+                self.assertFalse(m.handle_running("okno"))                    # inna wersja: zatrzymaj ja i uruchom sie
+        self.assertEqual(calls, [("show", 8000, "okno"), "stop"])
+        with mock.patch.object(m, "running_port", return_value=None):
+            self.assertFalse(m.handle_running("okno"))
+
 
 class TestShutdownApi(unittest.TestCase):
     def test_shutdown_requires_header_and_stops_server(self):

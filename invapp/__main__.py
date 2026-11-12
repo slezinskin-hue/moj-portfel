@@ -170,6 +170,23 @@ def show_running(port, mode):
         webbrowser.open(f"http://{config.HOST}:{port}/")
 
 
+def handle_running(mode):
+    """Aplikacja na tych danych juz dziala? Ta sama wersja -> pokaz ja (okno na wierzch / karta) i zakoncz (True).
+    INNA wersja (np. starsza po aktualizacji albo wersja z folderu z kodem) -> zatrzymaj ja i uruchom te (False) - inaczej nowa wersja
+    podlaczylaby sie do starej i pokazala jej strone w przegladarce."""
+    running = running_port()
+    if running is None:
+        return False
+    other = our_app_running(running)
+    if other == __version__:
+        print("Aplikacja już działa – pokazuję ją.")
+        show_running(running, mode)
+        return True
+    print(f"Działa inna wersja aplikacji ({other}) – zamykam ją i uruchamiam {__version__}.")
+    stop_running()
+    return False
+
+
 def windows_dark_mode():
     """Ciemny motyw aplikacji w Windows (tlo okna przed zaladowaniem strony - bez blysku innego koloru)."""
     if os.name != "nt":
@@ -239,10 +256,7 @@ def main():
         sys.exit(0 if stop_running() else 1)
     check_dependencies()
     mode = choose_mode(a, has_webview())
-    running = running_port()
-    if running is not None:
-        print("Aplikacja już działa – pokazuję ją.")
-        show_running(running, mode)
+    if handle_running(mode):
         return
     _app_user_model_id()
     port = a.port
