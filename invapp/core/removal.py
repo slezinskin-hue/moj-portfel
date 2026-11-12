@@ -8,7 +8,9 @@ Zasada: stan po usunieciu = stan, jak gdyby tego pliku NIGDY nie wczytano.
 * powiazania liczone z calej ksiegi (przelewy miedzy kontami, podatek -> dywidenda, zlecenia, splity wykryte z danych, klasyfikacja wplat)
   sa liczone od nowa z pozostalych danych tak samo jak przy imporcie; partie i koszty - przeliczone od zera;
 * konto, ktore nie ma juz zadnych danych z plikow, jest usuwane (z decyzjami dotyczacymi tylko tego konta, np. lokata);
-* decyzje uzytkownika niezalezne od pliku zostaja (reguly walut, potwierdzone splity, rejestr kontrahentow).
+* decyzje dotyczace instrumentow, ktore nie maja juz zadnych danych (splity), i reguly walut brokera bez zadnego pliku sa usuwane -
+  po ponownym wczytaniu aplikacja zapyta o nie od nowa (decyzja uzytkownika 2026-11-12); decyzje dotyczace danych, ktore zostaja, zostaja
+  (np. przyjety split instrumentu, ktory jest jeszcze na innym koncie), tak samo rejestr kontrahentow i ustawienia aplikacji.
 Ksiega jest chroniona wyzwalaczami przed zmianami - na czas tej jednej transakcji (rola wlasciciela) sa wylaczone i wlaczane z powrotem.
 W aplikacji przed usunieciem robi sie automatyczna kopia zapasowa bazy.
 """
@@ -69,6 +71,22 @@ def remove_account(conn, account_id):
         ops += res["usuniete_operacje"]; accounts |= set(res["usuniete_konta"]); files.append(res["plik"])
     cur.execute("select count(*) from transactions where account_id = %s", (account_id,))
     return {"konto": name, "usuniete_pliki": files, "usuniete_operacje": ops, "usuniete_konta": sorted(accounts), "pozostale_operacje_konta": cur.fetchone()[0]}
+
+
+def remove_all(conn):
+    """Usuwa WSZYSTKIE wczytane pliki (wszystkie portfele) - stan jak po czystej instalacji: bez kont, operacji i decyzji dotyczacych danych.
+    Zostaje to, co nie pochodzi z plikow: konta bankowe z zakladki Gotowka, ustawienia aplikacji, dane referencyjne (ceny, kursy, specyfikacje).
+    Bez commitu (robi go wywolujacy)."""
+    cur = conn.cursor()
+    batches = _ids(cur, "select batch_id from import_batches where status = 'COMMITTED' order by batch_id desc")
+    if not batches:
+        raise ImportFailed("Nie ma wczytanych plików.")
+    ops, accounts, files = 0, set(), []
+    for b in batches:
+        res = remove_batch(conn, b)
+        ops += res["usuniete_operacje"]; accounts |= set(res["usuniete_konta"]); files.append(res["plik"])
+    cur.execute("select count(*) from transactions")
+    return {"usuniete_pliki": files, "usuniete_operacje": ops, "usuniete_konta": sorted(accounts), "pozostale_operacje": cur.fetchone()[0]}
 
 
 def _remove(cur, conn, batch_id, code, broker_id, others):
@@ -145,6 +163,8 @@ def _remove(cur, conn, batch_id, code, broker_id, others):
         for t in ("account_aliases", "account_identifiers", "scope_accounts", "cash_deposit_terms", "account_balance_snapshots", "corporate_action_position_map"):
             cur.execute(f"delete from {t} where account_id = any(%s)", (empty,))
         cur.execute("delete from accounts where account_id = any(%s)", (empty,))
+    # 6a. decyzje, ktore dotyczyly juz tylko usunietych danych (po ponownym wczytaniu aplikacja zapyta o nie od nowa)
+    forgotten = _forget_orphan_decisions(cur, broker_id)
     # 7. powiazania i warstwa pochodna od nowa (te same procedury co przy imporcie)
     report = {"warnings": [], "info": []}
     if code == "XTB":
@@ -162,4 +182,38 @@ def _remove(cur, conn, batch_id, code, broker_id, others):
     b = brokers.by_code(code)
     if b is not None:
         b.rebuild_derived(conn)
-    return {"usuniete_operacje": len(gone), "zachowane_wspolne": len(kept_shared), "usuniete_konta": removed_accounts}
+    return {"usuniete_operacje": len(gone), "zachowane_wspolne": len(kept_shared), "usuniete_konta": removed_accounts, "zapomniane_decyzje": forgotten}
+
+
+def _forget_orphan_decisions(cur, broker_id):
+    """Decyzja uzytkownika 2026-11-12: "jak usune portfel i dodam go znowu, aplikacja ma ponownie zapytac o wszystko, co sie nie zgadza".
+    * instrumenty tego brokera BEZ zadnych danych w zadnym koncie (operacje, partie, pozycje, migawki): ich korekty (splity - przyjete, odrzucone,
+      hipotezy) i ostrzezenia jakosci danych sa usuwane;
+    * gdy broker nie ma juz zadnego wczytanego pliku: jego reguly walut (np. .PL = PLN) sa usuwane, a waluta instrumentow ustalona TYLKO ta regula
+      wraca do "nieznanej" (zmiana zapisuje sie w historii atrybutow);
+    * decyzje dotyczace instrumentow lub kont, ktore nadal maja dane, zostaja. Ustawienia aplikacji (np. zrodlo cen) nie zaleza od portfela - zostaja."""
+    orphans = _ids(cur, """select distinct la.listing_id from listing_aliases la where la.broker_id = %s
+                             and not exists (select 1 from transactions t where t.listing_id = la.listing_id)
+                             and not exists (select 1 from derived_lots d where d.listing_id = la.listing_id)
+                             and not exists (select 1 from broker_closed_positions c where c.listing_id = la.listing_id)
+                             and not exists (select 1 from broker_position_snapshots s where s.listing_id = la.listing_id)""", (broker_id,))
+    out = {"korekty": 0, "reguly_walut": 0, "waluty_instrumentow": 0}
+    if orphans:
+        actions = _ids(cur, "select action_id from corporate_actions where listing_id = any(%s)", (orphans,))
+        if actions:
+            cur.execute("update broker_closed_positions set corporate_action_id = null where corporate_action_id = any(%s)", (actions,))
+            cur.execute("delete from corporate_action_position_map where action_id = any(%s)", (actions,))
+            cur.execute("delete from data_quality_issues where batch_id is null and (details->>'action_id')::bigint = any(%s)", (actions,))
+            cur.execute("delete from corporate_actions where action_id = any(%s)", (actions,))
+            out["korekty"] = len(actions)
+        cur.execute("delete from data_quality_issues where batch_id is null and entity_ref = any(%s)", ([f"listing:{l}" for l in orphans],))
+    cur.execute("select exists (select 1 from import_batches where broker_id = %s)", (broker_id,))
+    if not cur.fetchone()[0]:
+        cur.execute("select count(*) from broker_symbol_suffix_rules where broker_id = %s", (broker_id,))
+        out["reguly_walut"] = cur.fetchone()[0]
+        cur.execute("delete from broker_symbol_suffix_rules where broker_id = %s", (broker_id,))
+        if orphans:
+            cur.execute("""update listings set trading_currency = null, currency_source = null, currency_checked_at = null, currency_evidence = null
+                           where listing_id = any(%s) and currency_status = 'POTWIERDZONY_PRZEZ_UZYTKOWNIKA'""", (orphans,))
+            out["waluty_instrumentow"] = cur.rowcount
+    return out

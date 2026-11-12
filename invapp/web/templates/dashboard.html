@@ -271,7 +271,10 @@
     </div>
     {% endfor %}
     <p class="note"><b>Usuń plik</b>: znika z portfela to, co pochodzi <b>tylko</b> z tego pliku (operacje obecne też w innym wczytanym pliku zostają), konto bez danych też.
-      <b>Usuń cały portfel</b>: znikają wszystkie pliki konta – portfel przestaje być śledzony, jakby nigdy nie był wczytany. Przed usunięciem robi się kopia zapasowa bazy; pliki możesz później wczytać ponownie.</p>
+      <b>Usuń cały portfel</b>: znikają wszystkie pliki konta – portfel przestaje być śledzony, jakby nigdy nie był wczytany. Przed usunięciem robi się kopia zapasowa bazy; pliki możesz później wczytać ponownie.
+      Decyzje dotyczące tylko usuniętych danych (np. split, waluta .PL) też znikają – po ponownym wczytaniu aplikacja zapyta o nie od nowa.</p>
+    <div class="danger-zone"><div><b>Usuń wszystkie portfele i pliki</b><div class="muted" style="font-size:.8rem">Aplikacja wróci do stanu jak po instalacji. Zostaną konta bankowe z zakładki „Gotówka” i ustawienia ⚙.</div></div>
+      <button class="btn danger" id="del-all" type="button">Usuń wszystko</button></div>
     {% endif %}
     <p class="note">Dane zostają na tym komputerze: <code>{{ d.data_dir }}</code>. Do internetu wysyłane są tylko symbole instrumentów (po ceny).</p>
   </div>

@@ -647,6 +647,18 @@
       setTimeout(() => location.reload(), 900);
     } catch (e) { toast('Brak połączenia z aplikacją'); b.disabled = false; b.textContent = 'Usuń plik'; }
   });
+  // usuniecie wszystkich portfeli i plikow (jak czysta instalacja; kopia zapasowa przed) - podwojne potwierdzenie
+  $('#del-all').onclick = async () => {
+    const b = $('#del-all');
+    if (!confirm('Usunąć WSZYSTKIE portfele i wczytane pliki?\n\nZniknie cała historia operacji, pozycji, dochodów i decyzji (splity, waluty, lokaty). Zostaną konta bankowe z zakładki „Gotówka” i ustawienia. Przed usunięciem zrobię kopię zapasową bazy.')) return;
+    if (!confirm('Na pewno? Aplikacja wróci do stanu jak po instalacji – pliki trzeba będzie wczytać od nowa.')) return;
+    b.disabled = true; b.textContent = 'Usuwam…';
+    try {
+      const d = await post('/api/usun-wszystko');
+      toast(`Usunięto ${d.usuniete_pliki.length} plików i ${d.usuniete_konta.length} kont.`);
+      setTimeout(() => location.href = '/podglad', 1100);
+    } catch (e) { toast(e.message); b.disabled = false; b.textContent = 'Usuń wszystko'; }
+  };
   // usuniecie calego portfela (konta): wszystkie jego pliki, stan jak bez nich (kopia zapasowa przed)
   $$('.del-account').forEach(b => b.onclick = async () => {
     if (!confirm(`Usunąć cały portfel „${b.dataset.name}” (${b.dataset.files} plik/ów)?\n\nZnikną wszystkie operacje, pozycje, dochody i decyzje tego konta – portfel przestanie być śledzony. Przed usunięciem zrobię kopię zapasową bazy. Pliki możesz później wczytać ponownie.`)) return;

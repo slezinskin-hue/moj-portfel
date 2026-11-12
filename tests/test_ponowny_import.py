@@ -173,6 +173,46 @@ class TestRepeatedImports(tm.Base):
         c = self.imp(self.csv("luty.csv", JAN + FEB))
         self.assertEqual(c["INSERTED"], 6)
 
+    def test_decisions_about_removed_data_are_forgotten_others_kept(self):
+        """Po usunieciu danych: korekty instrumentow bez danych i reguly walut brokera bez plikow znikaja (pytania wroca); reszta zostaje."""
+        from invapp.core import removal
+        def listing(sym, ccy=None):
+            s = self.one("insert into securities(name,asset_class) values (%s,'STOCK') returning security_id", (sym,))
+            l = self.one("insert into listings(security_id,display_name,trading_currency) values (%s,%s,%s) returning listing_id", (s, sym, ccy))
+            self.cur.execute("insert into listing_aliases(broker_id,broker_symbol,listing_id) values (%s,%s,%s)", (self.xtb, sym, l))
+            return l
+        gone, kept = listing("AAA.PL"), listing("BBB.PL")
+        self.cur.execute("""update listings set trading_currency = 'PLN', currency_status = 'POTWIERDZONY_PRZEZ_UZYTKOWNIKA', currency_source = 'regula .PL',
+                            currency_checked_at = now() where listing_id = any(%s)""", ([gone, kept],))
+        for l, st in ((gone, "REJECTED"), (kept, "CONFIRMED")):
+            self.cur.execute("""insert into corporate_actions(listing_id,action_type,effective_date,effective_date_status,applies_to_lots_opened_before,ratio_new,ratio_old,source,status,evidence)
+                                values (%s,'SPLIT',NULL,'UNKNOWN','2026-02-13T14:00Z',10,1,'INFERRED',%s,'{"r":1}')""", (l, st))
+        self.cur.execute("insert into broker_symbol_suffix_rules(broker_id,symbol_suffix,value,source,confirmed_at) values (%s,'PL','PLN','test',now())", (self.xtb,))
+        acc = self.account(self.xtb, "X9")
+        self.tx(acc, self.xtb, "BUY", D(-100), "2026-01-05T10:00Z", listing=kept, qty=D(1), price=D(100))   # BBB.PL ma dane, AAA.PL nie
+        b = self.one("""insert into import_batches(broker_id,source_file_name,source_file_sha256,parser_name,parser_version,status)
+                        values (%s,'f',repeat('a',64),'p','1','COMMITTED') returning batch_id""", (self.xtb,))
+        out = removal._forget_orphan_decisions(self.cur, self.xtb)
+        self.assertEqual(out, {"korekty": 1, "reguly_walut": 0, "waluty_instrumentow": 0})                   # broker ma jeszcze plik: regula zostaje
+        self.assertEqual(self.rows("select listing_id from corporate_actions"), [{"listing_id": kept}])
+        self.cur.execute("delete from import_batches where batch_id = %s", (b,))
+        out = removal._forget_orphan_decisions(self.cur, self.xtb)
+        self.assertEqual(out, {"korekty": 0, "reguly_walut": 1, "waluty_instrumentow": 1})                   # brak plikow brokera: regula i waluta z reguly znikaja
+        self.assertEqual(self.one("select currency_status from listings where listing_id = %s", (gone,)), "NIEZNANY")
+        self.assertEqual(self.one("select trading_currency from listings where listing_id = %s", (kept,)), "PLN")   # instrument z danymi - bez zmian
+        self.assertEqual(self.one("select count(*) from listing_attribute_history where listing_id = %s and attribute = 'TRADING_CURRENCY' and status = 'NIEZNANY'", (gone,)), 2)
+
+    def test_remove_everything(self):
+        from invapp.core import removal
+        from invapp.core.common import ImportFailed
+        self.imp(self.csv("styczen.csv", JAN)); self.imp(self.csv("luty.csv", JAN + FEB))
+        res = removal.remove_all(tm._conn)
+        self.assertEqual((len(res["usuniete_pliki"]), res["pozostale_operacje"]), (2, 0))
+        for t in ("accounts", "transactions", "import_batches", "raw_rows"):
+            self.assertEqual(self.one(f"select count(*) from {t}"), 0, t)
+        with self.assertRaises(ImportFailed):
+            removal.remove_all(tm._conn)
+
     def test_older_export_after_newer_adds_nothing(self):
         self.imp(self.csv("nowy.csv", JAN + FEB))
         ref = self.ledger()

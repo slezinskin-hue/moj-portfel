@@ -86,6 +86,10 @@ tests/                      testy publiczne (dane syntetyczne; wbudowany Postgre
 * **Diagnoza kontroli liczb** (`pricing/diagnose.py`): przy każdej uwadze prawdopodobna przyczyna i rozwiązania z istniejących mechanizmów –
   odpowiedź na pytanie brokera (np. split „Zdecyduj za mnie”, waluta .PL), ponowne pobranie cen, przeliczenie partii od nowa z eksportów
   (`POST /api/przelicz`), wczytanie brakującego pliku. Żadna kwota nie jest korygowana ręcznie.
+* **Usuwanie** (`core/removal.py`): plik, cały portfel (konto) albo wszystko – zawsze „jak gdyby nie wczytano”. Razem z danymi znikają decyzje,
+  które dotyczyły już tylko usuniętych danych: splity instrumentów bez żadnych danych (przyjęte i odrzucone), reguły walut brokera bez żadnego
+  pliku (np. .PL = PLN – waluta instrumentów ustalona tą regułą wraca do „nieznanej”), lokata usuniętego konta. Po ponownym wczytaniu aplikacja
+  pyta o nie od nowa. Zostają: konta bankowe z „Gotówki”, ustawienia, dane referencyjne (ceny, kursy, specyfikacje).
 * **Split „Zdecyduj za mnie”** (`brokers/xtb/broker._auto_split`): dzień podziału z historii splitów Yahoo, jeśli współczynnik się zgadza
   i dzień leży między ostatnim zakupem a pierwszą sprzedażą po podziale; inaczej granica z transakcji. Zawsze oznaczony jako niesprawdzony
   w źródle oficjalnym (`official_source_status = NOT_VERIFIED`).

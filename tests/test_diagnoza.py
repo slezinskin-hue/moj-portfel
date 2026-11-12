@@ -97,7 +97,7 @@ class TestFixApi(unittest.TestCase):
         from fastapi.testclient import TestClient
         from invapp.web.app import app
         c = TestClient(app, base_url="http://127.0.0.1")
-        for url in ("/api/ceny/odswiez", "/api/przelicz", "/api/konto/1/usun"):
+        for url in ("/api/ceny/odswiez", "/api/przelicz", "/api/konto/1/usun", "/api/usun-wszystko"):
             self.assertEqual(c.post(url).status_code, 403, url)
 
 

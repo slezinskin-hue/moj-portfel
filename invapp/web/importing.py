@@ -125,6 +125,24 @@ def remove_account(account_id, make_backup=True):
         return res
 
 
+def remove_everything(make_backup=True):
+    """Usuniecie wszystkich portfeli i plikow (stan jak po czystej instalacji), z kopia zapasowa przed."""
+    from invapp.core import removal
+    with _import_lock:
+        if make_backup:
+            from invapp.db import backup
+            backup.create(label="przed-usunieciem-wszystkiego")
+        conn = owner_conn()
+        try:
+            res = removal.remove_all(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+        finally:
+            conn.close()
+        return res
+
+
 # ---------------------------------------------------------------- pytania brokerow (np. waluta instrumentow .PL)
 def pending_questions(conn):
     out = []
