@@ -128,9 +128,105 @@ def install_console_close_handler():
     ctypes.windll.kernel32.SetConsoleCtrlHandler(handler, True)
 
 
+APP_ID = "MojPortfel.App"            # identyfikator aplikacji Windows (pasek zadan: ikona i grupowanie jak skrot z instalatora)
+ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "static", "ikona.ico")
+
+
+def has_webview():
+    """Czy dostepne jest wlasne okno aplikacji (pywebview + WebView2, silnik Edge wbudowany w Windows 10/11)."""
+    try:
+        import webview  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def choose_mode(a, webview_available):
+    """'okno' (wlasne okno programu), 'przegladarka' albo 'bez-okna' (--no-browser: tylko serwer, np. testy)."""
+    if a.no_browser:
+        return "bez-okna"
+    if a.przegladarka or not webview_available:
+        return "przegladarka"
+    return "okno"
+
+
+def show_running(port, mode):
+    """Aplikacja juz dziala: przenies jej okno na wierzch (tryb okna) albo otworz karte przegladarki."""
+    if mode == "okno":
+        if os.name == "nt":
+            try:
+                import ctypes
+                ctypes.windll.user32.AllowSetForegroundWindow(-1)     # ASFW_ANY: dzialajaca aplikacja moze wyjsc na wierzch
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            req = urllib.request.Request(f"http://{config.HOST}:{port}/api/pokaz", data=b"{}", method="POST",
+                                         headers={"X-Requested-With": "invapp", "Content-Type": "application/json"})
+            if json.loads(urllib.request.urlopen(req, timeout=5).read().decode("utf-8")).get("okno"):
+                return
+        except Exception:  # noqa: BLE001
+            pass
+    if mode != "bez-okna":
+        webbrowser.open(f"http://{config.HOST}:{port}/")
+
+
+def windows_dark_mode():
+    """Ciemny motyw aplikacji w Windows (tlo okna przed zaladowaniem strony - bez blysku innego koloru)."""
+    if os.name != "nt":
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
+    except OSError:
+        return False
+
+
+def _app_user_model_id():
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def run_window(app, server, url, port):
+    """Serwer w watku pobocznym, okno w glownym (wymog pywebview). Zamkniecie okna = czyste zatrzymanie serwera i bazy.
+    Zwraca False, gdy okna nie dalo sie otworzyc (wtedy wywolujacy otwiera przegladarke, a serwer dziala dalej)."""
+    import webview
+    th = threading.Thread(target=server.run, name="serwer", daemon=True)
+    th.start()
+    for _ in range(240):                               # pierwszy start (tworzenie bazy) moze potrwac
+        if our_app_running(port) or not th.is_alive():
+            break
+        time.sleep(0.5)
+    if not th.is_alive():
+        return True                                    # serwer nie wystartowal (blad w dzienniku) - nie ma czego pokazywac
+    try:
+        window = webview.create_window(APP_NAME, url, width=1360, height=900, min_size=(960, 640), text_select=True, zoomable=True,
+                                       maximized=True,                       # domyslnie na caly ekran (z paskiem tytulu i przyciskiem zamkniecia)
+                                       background_color="#0b1120" if windows_dark_mode() else "#f4f6fa")
+        app.state.window = window
+        storage = config.data_dir() / "okno"
+        storage.mkdir(parents=True, exist_ok=True)
+        webview.start(private_mode=False, storage_path=str(storage), icon=ICON if os.path.exists(ICON) else None)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        app.state.window = None
+        print("Nie udało się otworzyć okna aplikacji – otwieram w przeglądarce.")
+        webbrowser.open(url)
+        th.join()                                      # dalej jak w trybie przegladarki: do /api/zamknij (przycisk na stronie)
+        return True
+    server.should_exit = True                          # okno zamkniete -> koniec aplikacji
+    th.join(60)
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(prog="invapp", description=APP_NAME)
-    ap.add_argument("--no-browser", action="store_true", help="nie otwieraj przegladarki")
+    ap.add_argument("--no-browser", action="store_true", help="bez okna i bez przegladarki (sam serwer)")
+    ap.add_argument("--przegladarka", action="store_true", help="otworz w przegladarce zamiast we wlasnym oknie")
     ap.add_argument("--port", type=int, default=config.DEFAULT_PORT)
     ap.add_argument("--data-dir", help="inny katalog danych (np. do prob)")
     ap.add_argument("--stop", action="store_true", help="zatrzymaj dzialajaca aplikacje i zakoncz")
@@ -142,19 +238,20 @@ def main():
     if a.stop:
         sys.exit(0 if stop_running() else 1)
     check_dependencies()
+    mode = choose_mode(a, has_webview())
     running = running_port()
     if running is not None:
-        print("Aplikacja już działa – otwieram przeglądarkę.")
-        if not a.no_browser:
-            webbrowser.open(f"http://{config.HOST}:{running}/")
+        print("Aplikacja już działa – pokazuję ją.")
+        show_running(running, mode)
         return
+    _app_user_model_id()
     port = a.port
     while not port_free(port):                     # port zajety przez inny program - nastepny wolny
         port += 1
     url = f"http://{config.HOST}:{port}/"
-    print(f"{APP_NAME} {__version__}\nAdres: {url} (tylko na tym komputerze)\nDane: {config.data_dir()}\n"
-          "Pierwsze uruchomienie przygotowuje bazę (kilka sekund). Zamknięcie tego okna albo Ctrl+C zatrzymuje aplikację i bazę.")
-    if not a.no_browser:
+    print(f"{APP_NAME} {__version__}\nAdres: {url} (tylko na tym komputerze), tryb: {mode}\nDane: {config.data_dir()}\n"
+          "Pierwsze uruchomienie przygotowuje bazę (kilka sekund).")
+    if mode == "przegladarka":
         def open_when_ready():
             for _ in range(240):
                 if our_app_running(port):
@@ -166,10 +263,13 @@ def main():
         import uvicorn
         from invapp.web.app import app
         server = uvicorn.Server(uvicorn.Config(app, host=config.HOST, port=port, log_level="warning", log_config=None))
-        app.state.server = server                  # /api/zamknij: czyste zatrzymanie z przegladarki albo z instalatora
-        state_file().write_text(json.dumps({"port": port, "pid": os.getpid(), "wersja": __version__}), encoding="utf-8")
+        app.state.server = server                  # /api/zamknij: czyste zatrzymanie z okna, przegladarki albo z instalatora
+        state_file().write_text(json.dumps({"port": port, "pid": os.getpid(), "wersja": __version__, "tryb": mode}), encoding="utf-8")
         try:
-            server.run()
+            if mode == "okno":
+                run_window(app, server, url, port)
+            else:
+                server.run()
         finally:
             try:
                 state_file().unlink()

@@ -1,6 +1,6 @@
 # Mój Portfel
 
-Lokalna aplikacja do śledzenia portfela inwestycyjnego – **bez logowania i bez chmury**, działa w przeglądarce, ale tylko na Twoim komputerze.
+Lokalna aplikacja do śledzenia portfela inwestycyjnego – **bez logowania i bez chmury**: działa we własnym oknie (silnik Edge WebView2), tylko na Twoim komputerze.
 Wczytujesz eksporty od brokera, a aplikacja liczy:
 
 * **wartość portfela** = ilość × aktualna cena z Yahoo Finance × kurs waluty (wszystko w PLN) + gotówka oprocentowana jako lokata,

@@ -77,6 +77,18 @@ class TestUpdates(unittest.TestCase):
                 updates.download_and_verify(r, INFO["repo"], d, fetch_bytes=lambda url: PAYLOAD)
 
 
+class TestStartMode(unittest.TestCase):
+    def test_choose_mode(self):
+        from types import SimpleNamespace as NS
+        from invapp.__main__ import choose_mode
+        self.assertEqual(choose_mode(NS(no_browser=False, przegladarka=False), True), "okno")             # domyslnie wlasne okno
+        self.assertEqual(choose_mode(NS(no_browser=False, przegladarka=False), False), "przegladarka")    # brak pywebview/WebView2
+        self.assertEqual(choose_mode(NS(no_browser=False, przegladarka=True), True), "przegladarka")
+        self.assertEqual(choose_mode(NS(no_browser=True, przegladarka=False), True), "bez-okna")
+        from invapp.__main__ import ICON
+        self.assertTrue(os.path.exists(ICON))                                                            # ikona okna jest w pakiecie programu
+
+
 class TestShutdownApi(unittest.TestCase):
     def test_shutdown_requires_header_and_stops_server(self):
         from fastapi.testclient import TestClient
@@ -92,6 +104,29 @@ class TestShutdownApi(unittest.TestCase):
             self.assertEqual(r.status_code, 200); self.assertTrue(app.state.server.should_exit)
         finally:
             del app.state.server
+        # wlasne okno aplikacji: zamkniecie = zamkniecie okna (konczy aplikacje); ponowne uruchomienie skrotu = okno na wierzch
+        import time
+
+        class FakeWindow:
+            def __init__(self):
+                self.calls = []
+                self._top = False
+            def destroy(self): self.calls.append("destroy")
+            def restore(self): self.calls.append("restore")
+            @property
+            def on_top(self): return self._top
+            @on_top.setter
+            def on_top(self, v): self.calls.append(f"on_top={v}"); self._top = v
+        app.state.server, app.state.window = FakeServer(), FakeWindow()
+        try:
+            self.assertEqual(c.post("/api/pokaz").status_code, 403)
+            self.assertTrue(c.post("/api/pokaz", headers={"X-Requested-With": "invapp"}).json()["okno"])
+            self.assertEqual(app.state.window.calls, ["restore", "on_top=True", "on_top=False"])
+            c.post("/api/zamknij", headers={"X-Requested-With": "invapp"}); time.sleep(0.6)
+            self.assertIn("destroy", app.state.window.calls); self.assertFalse(app.state.server.should_exit)   # serwer konczy sie po zamknieciu okna
+        finally:
+            del app.state.server; del app.state.window
+        self.assertFalse(c.post("/api/pokaz", headers={"X-Requested-With": "invapp"}).json()["okno"])          # bez okna (tryb przegladarki)
         self.assertEqual(c.post("/api/aktualizacja/instaluj").status_code, 403)
         self.assertEqual(c.post("/api/import/1/usun").status_code, 403)                          # usuwanie pliku tez tylko z naglowkiem ochronnym
         self.assertEqual(c.get("/api/aktualizacja").status_code, 200)

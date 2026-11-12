@@ -11,14 +11,15 @@ param(
     [string]$PythonSha256 = "",
     [string]$HostPython = "python",
     [string]$Iscc = "",
-    [string]$UpdateRepo = $env:GITHUB_REPOSITORY
+    [string]$UpdateRepo = $env:GITHUB_REPOSITORY,
+    [string]$StageName = "stage"          # inny folder roboczy, gdy poprzednia paczka jest wlasnie uruchomiona (pliki zablokowane)
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Root = Split-Path -Parent $PSScriptRoot
 $Version = (Select-String -Path "$Root\invapp\__init__.py" -Pattern '__version__ = "([0-9]+\.[0-9]+\.[0-9]+)"').Matches[0].Groups[1].Value
 if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$Version") { throw "Tag $($env:GITHUB_REF_NAME) nie zgadza sie z wersja w invapp\__init__.py ($Version)." }
-$Build = Join-Path $Root "build"; $Cache = Join-Path $Build "cache"; $Stage = Join-Path $Build "stage"; $Dist = Join-Path $Root "dist"
+$Build = Join-Path $Root "build"; $Cache = Join-Path $Build "cache"; $Stage = Join-Path $Build $StageName; $Dist = Join-Path $Root "dist"
 New-Item -ItemType Directory -Force $Cache, $Dist | Out-Null
 if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
 Write-Host "== Moj Portfel $Version (aktualizacje z repozytorium GitHub: '$UpdateRepo')"
@@ -41,7 +42,12 @@ Set-Content $Pth.FullName -Value @($Lib, ".", "Lib\site-packages", "..\app", "im
 
 # 2. Biblioteki: dokladnie wersje z requirements-lock.txt (bez dociagania innych), tylko paczki binarne dla Windows x64 / Python 3.12
 $Site = Join-Path $Stage "python\Lib\site-packages"
-& $HostPython -m pip install --disable-pip-version-check --no-warn-script-location --no-compile --target $Site `
+# proxy_tools (zaleznosc pywebview) nie ma gotowej paczki .whl na PyPI - budujemy ja lokalnie (czysty Python, kilka linii kodu)
+$Wheels = Join-Path $Cache "wheels"
+New-Item -ItemType Directory -Force $Wheels | Out-Null
+& $HostPython -m pip wheel --disable-pip-version-check --no-deps -w $Wheels "proxy_tools==0.1.0"
+if ($LASTEXITCODE -ne 0) { throw "Budowanie paczki proxy_tools nie powiodlo sie." }
+& $HostPython -m pip install --disable-pip-version-check --no-warn-script-location --no-compile --target $Site --find-links $Wheels `
     --only-binary=:all: --platform win_amd64 --python-version 3.12 --implementation cp --no-deps -r (Join-Path $Root "requirements-lock.txt")
 if ($LASTEXITCODE -ne 0) { throw "pip install nie powiodl sie." }
 Get-ChildItem $Site -Directory -Filter "bin" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue   # skrypty konsolowe pip (niepotrzebne)

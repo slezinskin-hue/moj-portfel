@@ -7,13 +7,15 @@
    (i opcjonalnie na pulpit).
    * Windows SmartScreen może pokazać „System Windows ochronił ten komputer” (instalator nie jest podpisany płatnym certyfikatem):
      **Więcej informacji → Uruchom mimo to**. Sumę SHA-256 pliku możesz porównać z tą w opisie wydania.
-3. Aplikacja otwiera się w przeglądarce (adres `http://127.0.0.1:…`, tylko ten komputer). Wczytaj eksporty z XTB (.xlsx) albo Trade Republic (.csv).
+3. Aplikacja otwiera się **we własnym oknie** (jak zwykły program; pod spodem silnik Edge WebView2 wbudowany w Windows 10/11, adres `http://127.0.0.1:…`,
+   tylko ten komputer). Gdyby okno nie mogło się otworzyć, aplikacja otworzy się w przeglądarce. Wczytaj eksporty z XTB (.xlsx) albo Trade Republic (.csv).
    Dane zostają w `%LOCALAPPDATA%\AplikacjaInwestycyjna`. Kolejne eksporty możesz wczytywać w każdej chwili – duplikaty są pomijane, dochodzą
    tylko nowe operacje.
    **Usunięcie pliku**: „＋ Wczytaj pliki” → lista „Wczytane pliki” → **Usuń**. Z portfela znika to, co pochodzi tylko z tego pliku (operacje
    obecne też w innym wczytanym pliku zostają, konto bez danych znika) – stan jak gdyby pliku nie wczytano. Przed usunięciem robi się kopia
    zapasowa bazy; plik można wczytać ponownie.
-4. Zamknięcie: przycisk **⏻** na stronie (zatrzymuje serwer i bazę). Ponowne otwarcie: skrót „Mój Portfel”.
+4. Zamknięcie: zamknij okno (albo przycisk **⏻**) – zatrzymuje serwer i bazę. Ponowne kliknięcie skrótu, gdy aplikacja działa, przenosi jej okno
+   na wierzch (bez drugiej kopii).
 5. **Aktualizacje**: aplikacja sprawdza najnowsze wydanie na GitHubie (co kilka godzin) i pokazuje pasek „Dostępna nowa wersja”. Przycisk
    **Zainstaluj aktualizację** pobiera instalator (tylko z wydania tego repozytorium, sprawdza sumę SHA-256), zamyka aplikację, instaluje nową
    wersję i ją uruchamia. Dane zostają; przed zmianą schematu bazy robi się kopia zapasowa (`kopie\`).
@@ -29,7 +31,7 @@
 4. kompiluje pliki `.pyc` i buduje instalator **Inno Setup 6** (`instalator\moj-portfel.iss`) → `dist\MojPortfel-Setup-X.Y.Z.exe` (~24 MB).
 
 Instalator przed instalacją na starej wersji zatrzymuje działającą aplikację (`python -m invapp --stop`), usuwa stare pliki programu (nie dane)
-i po instalacji uruchamia aplikację ponownie. Aplikacja działa bez okna konsoli (`pythonw.exe`); dziennik: `%LOCALAPPDATA%\AplikacjaInwestycyjna\logi`.
+i po instalacji uruchamia aplikację ponownie. Aplikacja działa we własnym oknie (pywebview + WebView2), bez okna konsoli (`pythonw.exe`); dziennik: `%LOCALAPPDATA%\AplikacjaInwestycyjna\logi`.
 
 ## Wydania (GitHub Actions)
 

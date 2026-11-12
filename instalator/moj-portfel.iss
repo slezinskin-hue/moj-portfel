@@ -56,19 +56,19 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 Source: "ikona.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m invapp"; WorkingDir: "{app}\app"; IconFilename: "{app}\ikona.ico"; Comment: "Otwiera Mój Portfel w przeglądarce"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m invapp"; WorkingDir: "{app}\app"; IconFilename: "{app}\ikona.ico"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m invapp"; WorkingDir: "{app}\app"; IconFilename: "{app}\ikona.ico"; Comment: "Mój Portfel"; AppUserModelID: "MojPortfel.App"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m invapp"; WorkingDir: "{app}\app"; IconFilename: "{app}\ikona.ico"; AppUserModelID: "MojPortfel.App"; Tasks: desktopicon
 
 [Run]
-; zwykla instalacja: pytanie "Uruchom" na koncu; aktualizacja z aplikacji (tryb cichy): uruchom ponownie bez nowej karty przegladarki
+; zwykla instalacja: pytanie "Uruchom" na koncu; aktualizacja z aplikacji (tryb cichy): aplikacja otwiera sie ponownie sama (we wlasnym oknie)
 Filename: "{app}\python\pythonw.exe"; Parameters: "-m invapp"; WorkingDir: "{app}\app"; Description: "Uruchom {#AppName}"; Flags: postinstall nowait skipifsilent
-Filename: "{app}\python\pythonw.exe"; Parameters: "-m invapp --no-browser"; WorkingDir: "{app}\app"; Flags: nowait; Check: WizardSilent
+Filename: "{app}\python\pythonw.exe"; Parameters: "-m invapp"; WorkingDir: "{app}\app"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{app}\python\python.exe"; Parameters: "-m invapp --stop"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "ZatrzymajAplikacje"
 
 [Messages]
-polish.FinishedLabel=Instalacja zakończona. Aplikacja otwiera się w przeglądarce (tylko na tym komputerze). Twoje dane są w %LOCALAPPDATA%\AplikacjaInwestycyjna i nie są usuwane przy aktualizacji ani deinstalacji.
+polish.FinishedLabel=Instalacja zakończona. Aplikacja otwiera się we własnym oknie (działa tylko na tym komputerze). Twoje dane są w %LOCALAPPDATA%\AplikacjaInwestycyjna i nie są usuwane przy aktualizacji ani deinstalacji.
 
 [Code]
 // Przed instalacja na starej wersji: czyste zatrzymanie dzialajacej aplikacji (serwer WWW i baza) - pliki nie sa wtedy zablokowane.

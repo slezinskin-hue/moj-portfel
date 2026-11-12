@@ -4,7 +4,7 @@ Na jednym komputerze działają obok siebie dwie rzeczy i **nie mieszają danych
 
 | | Zainstalowana aplikacja | Wersja rozwojowa (folder z kodem) |
 |---|---|---|
-| Uruchamianie | skrót „Mój Portfel” | `python uruchom.py` |
+| Uruchamianie | skrót „Mój Portfel” (własne okno) | `python uruchom.py` (własne okno, gdy zainstalowany jest pywebview z `requirements.txt`; inaczej przeglądarka; `--przegladarka` wymusza przeglądarkę) |
 | Dane | `%LOCALAPPDATA%\AplikacjaInwestycyjna` (prawdziwe) | `%LOCALAPPDATA%\AplikacjaInwestycyjna-dev` (testowe) |
 | Znaczek na stronie | – | „wersja deweloperska” |
 | Aktualizacje | z GitHub Releases (pasek na stronie) | to, co właśnie zmieniasz |

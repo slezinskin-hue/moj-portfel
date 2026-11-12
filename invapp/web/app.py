@@ -266,8 +266,53 @@ async def api_shutdown(request: Request):
     server = getattr(request.app.state, "server", None)
     if server is None:
         return JSONResponse({"blad": "Aplikacja nie została uruchomiona przez program startowy."}, status_code=409)
-    server.should_exit = True
+    window = getattr(request.app.state, "window", None)
+    if window is not None:                                   # wlasne okno: zamkniecie okna konczy aplikacje (serwer i baza)
+        threading.Timer(0.3, window.destroy).start()
+    else:
+        server.should_exit = True
     return JSONResponse({"zamykanie": True})
+
+
+@app.post("/api/pokaz")
+async def api_show(request: Request):
+    """Ponowne uruchomienie skrotu, gdy aplikacja juz dziala: jej okno na wierzch (zamiast drugiej kopii)."""
+    if not _same_origin(request):
+        return JSONResponse({"blad": "niedozwolone zadanie"}, status_code=403)
+    window = getattr(request.app.state, "window", None)
+    if window is None:
+        return JSONResponse({"okno": False})
+    try:
+        if not _focus_native_window():                     # Windows: przywroc tylko zminimalizowane (zmaksymalizowane zostaje) i daj na wierzch
+            window.restore(); window.on_top = True; window.on_top = False
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"okno": False})
+    return JSONResponse({"okno": True})
+
+
+def _focus_native_window():
+    """Okno tego procesu na wierzch (Windows). Zwraca False, gdy sie nie da (inny system, brak okna)."""
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+    user32, me, found = ctypes.windll.user32, os.getpid(), []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == me and user32.IsWindowVisible(hwnd) and user32.GetWindowTextLengthW(hwnd) > 0:
+            found.append(hwnd)
+        return True
+    user32.EnumWindows(each, 0)
+    if not found:
+        return False
+    hwnd = found[0]
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)                             # SW_RESTORE
+    user32.SetForegroundWindow(hwnd)
+    return True
 
 
 @app.get("/api/aktualizacja")
