@@ -20,7 +20,10 @@ function Fail($msg) {
 if ($env:GITHUB_ACTIONS -ne "true") { Write-Host "Ten test uruchamia sie tylko w GitHub Actions (odinstalowuje aplikacje)."; exit 2 }
 if (Test-Path $Data) { Fail "katalog danych juz istnieje - to nie jest czysty system" }
 Write-Host "1. Instalacja (tryb cichy): $Installer"
-$p = Start-Process -FilePath $Installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-" -Wait -PassThru
+# bez -Wait: Start-Process -Wait czeka tez na procesy potomne, a instalator na koniec uruchamia aplikacje (dziala dalej) - czekamy tylko na instalator
+$p = Start-Process -FilePath $Installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-" -PassThru
+$null = $p.Handle
+if (-not $p.WaitForExit(600000)) { Fail "instalator nie zakonczyl sie w 10 minut" }
 if ($p.ExitCode -ne 0) { Fail "instalator zakonczyl sie kodem $($p.ExitCode)" }
 if (-not (Test-Path "$App\python\pythonw.exe")) { Fail "brak $App\python\pythonw.exe" }
 if (-not (Test-Path "$App\app\invapp\_build.py")) { Fail "brak pliku _build.py (repozytorium aktualizacji)" }
@@ -63,9 +66,11 @@ try { Invoke-RestMethod "http://127.0.0.1:$port/zdrowie" -TimeoutSec 3 | Out-Nul
 
 Write-Host "6. Deinstalacja (tryb cichy nie usuwa danych)"
 $un = Get-ChildItem "$App\unins*.exe" | Select-Object -First 1
-$p = Start-Process -FilePath $un.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
-if ($p.ExitCode -ne 0) { Fail "deinstalacja: kod $($p.ExitCode)" }
-Start-Sleep -Seconds 3
-if (Test-Path "$App\python\python.exe") { Fail "program nie zostal usuniety" }
+$p = Start-Process -FilePath $un.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -PassThru
+$null = $p.Handle
+if (-not $p.WaitForExit(300000)) { Fail "deinstalator nie zakonczyl sie w 5 minut" }
+# deinstalator Inno uruchamia swoja kopie z katalogu tymczasowego i sam konczy sie od razu - czekamy na usuniecie plikow programu
+for ($i = 0; $i -lt 120 -and (Test-Path "$App\python\python.exe"); $i++) { Start-Sleep -Seconds 2 }
+if (Test-Path "$App\python\python.exe") { Fail "program nie zostal usuniety w 4 minuty" }
 if (-not (Test-Path "$Data\baza")) { Fail "dane zostaly usuniete w trybie cichym" }
 Write-Host "OK: instalacja, start, pusta baza, bezpieczenstwo, zatrzymanie i deinstalacja dzialaja na czystym Windowsie."

@@ -20,6 +20,7 @@ jobs:
           .\instalator\build.ps1 -HostPython python
           Get-Content dist\build.env | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
       - name: Test instalacji na czystym Windowsie
+        timeout-minutes: 20
         shell: powershell
         run: .\instalator\test_instalacji.ps1 -Installer "dist\$env:INSTALLER_NAME" -Version $env:APP_VERSION
       - uses: actions/upload-artifact@v4
