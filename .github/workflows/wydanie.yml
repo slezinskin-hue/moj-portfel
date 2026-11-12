@@ -1,0 +1,41 @@
+# Wydanie: po wyslaniu tagu vX.Y.Z (np. v0.3.0) -> testy -> instalator na Windows -> GitHub Release z instalatorem i suma SHA-256.
+# Aplikacje zainstalowane u uzytkownikow sprawdzaja najnowsze wydanie i proponuja aktualizacje.
+# Wersja w tagu musi byc taka sama jak __version__ w invapp/__init__.py (sprawdza to instalator/build.ps1).
+name: Wydanie
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  testy:
+    uses: ./.github/workflows/testy.yml
+
+  instalator:
+    needs: testy
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+      - name: Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Budowanie instalatora
+        shell: powershell
+        run: |
+          .\instalator\build.ps1 -HostPython python
+          Get-Content dist\build.env | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+      - name: Wydanie na GitHubie
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          printf '%s\n\n---\nPobierz **%s** (Windows 10/11, bez uprawnień administratora), uruchom i postępuj według kreatora.\nAktualizacja: aplikacja sama zaproponuje instalację; dane zostają.\n\nSHA256: %s\n' \
+            "$NOTES" "$INSTALLER_NAME" "$INSTALLER_SHA256" > notes.md
+          gh release create "$GITHUB_REF_NAME" "dist/$INSTALLER_NAME" "dist/$INSTALLER_NAME.sha256" \
+            --title "Mój Portfel $APP_VERSION" --notes-file notes.md

@@ -1,0 +1,24 @@
+﻿# --- pliki tymczasowe i wyniki budowania
+__pycache__/
+*.pyc
+*.mutbak
+*.lnk
+build/
+dist/
+invapp/_build.py
+
+# --- DANE OSOBISTE (zostaja tylko na tym komputerze, nigdy w repozytorium)
+export/
+lokalne/
+docs/historia/
+# testy na prawdziwych eksportach i z prawdziwymi liczbami (uruchamiane lokalnie)
+tests/test_model_principles.py
+tests/test_step1_migrations.py
+tests/test_import_xtb.py
+tests/test_app_import.py
+tests/test_import_tr.py
+tests/test_lokalne.py
+tests/seed_accounts.py
+tests/fixtures/
+tests/mutation_check.py
+tests/mutation_check_import.py

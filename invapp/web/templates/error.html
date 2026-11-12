@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mój Portfel</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
+    .ok { color: #0a7a2f; } .err { color: #b00020; }
+    code { background: #f2f2f2; padding: 0 .25rem; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h1>Mój Portfel</h1>
+  <p>Szkielet aplikacji (krok 0 Fazy 1). Brak jeszcze danych ani obliczeń: importy i widoki powstaną po akceptacji kolejnych kroków.</p>
+  <h2>Stan systemu</h2>
+  <ul>
+    <li>Aplikacja: <span class="ok">działa</span> (tylko ten komputer, adres 127.0.0.1)</li>
+    {% if db.ok %}
+      <li>Baza danych: <span class="ok">połączona</span>, PostgreSQL {{ db.server_version }}</li>
+      <li>Ostatnia zastosowana migracja: {{ db.last_migration if db.last_migration is not none else "brak tabeli migracji" }}</li>
+    {% else %}
+      <li>Baza danych: <span class="err">brak połączenia</span> ({{ db.error }}). Uruchom aplikację ponownie; jeśli problem wraca, sprawdź plik dziennika w katalogu danych aplikacji.</li>
+    {% endif %}
+  </ul>
+</body>
+</html>

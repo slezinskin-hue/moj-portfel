@@ -1,0 +1,22 @@
+# Testy publiczne (dane syntetyczne) przy kazdym wyslaniu kodu na main i w pull requestach; wywolywane tez przed wydaniem.
+name: Testy
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  testy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Biblioteki (dokladne wersje)
+        run: pip install --no-deps -r requirements-lock.txt
+      - name: Testy
+        run: >
+          python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits
+          tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton
