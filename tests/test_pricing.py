@@ -155,6 +155,44 @@ class TestLiveValuation(PricingBase):
         self.assertEqual(r["securities_value_live"], D(820) + D(1000))
         self.assertEqual(r["residual_live"], D(0))
 
+    def setting(self, key, value):
+        from invapp.core import cash
+        cash.set_setting(self.cur, key, value)
+
+    def test_setting_xtb_export_values_exactly_as_report_while_qty_matches(self):
+        t = SNAP + timedelta(hours=4)
+        self.verify({"AAA": (110, "USD", t), "PPP.WA": (101, "PLN", t), "USDPLN=X": (4.10, "PLN", t)})
+        service.refresh_quotes(tm._conn, FakeYahoo({"AAA": (110, "USD", t), "PPP.WA": (101, "PLN", t), "USDPLN=X": (4.10, "PLN", t)}), pause=0)
+        self.assertEqual(self.pos(self.pl)["value_used"], D(1010))                           # domyslnie: Yahoo
+        self.setting("price_source", "XTB_EXPORT")
+        us, pl = self.pos(self.us), self.pos(self.pl)
+        self.assertEqual((us["value_source"], us["price_source"], us["value_used"]), ("BROKER", "XTB_EXPORT", D(800)))   # dokladnie jak w raporcie XTB
+        self.assertEqual(pl["value_used"], D(1000))
+        r = self.rows("select * from v_scope_result_live where scope_code='BROKER:XTB'")[0]
+        self.assertEqual((r["securities_value_live"], r["snapshot_positions"], r["live_positions"]), (D(1800), 0, 0))     # wybrane ustawieniem != "brak ceny"
+        self.assertEqual(r["residual_live"], D(0))
+        # zakup po eksporcie (inna ilosc niz w raporcie) -> raport nieaktualny dla tej pozycji -> cena rynkowa
+        self.cur.execute("update derived_lots set qty_as_reported = 3, qty_initial = 3, qty_remaining = 3 where listing_id = %s", (self.us,))
+        us = self.pos(self.us)
+        self.assertEqual((us["value_source"], us["value_used"]), ("LIVE", D("1353.0")))           # 3 x 110 x 4,10
+        self.setting("price_source", "YAHOO")
+        self.assertEqual(self.pos(self.pl)["value_used"], D(1010))
+
+    def test_setting_nbp_fx(self):
+        t = SNAP + timedelta(hours=4)
+        self.verify({"AAA": (110, "USD", t), "PPP.WA": (101, "PLN", t), "USDPLN=X": (4.10, "PLN", t)})
+        service.refresh_quotes(tm._conn, FakeYahoo({"AAA": (110, "USD", t), "PPP.WA": (101, "PLN", t), "USDPLN=X": (4.10, "PLN", t)}), pause=0)
+        self.assertEqual((self.pos(self.us)["fx_source"], self.pos(self.us)["value_used"]), ("YAHOO", D("902.0")))
+        self.setting("fx_source", "NBP")
+        p = self.pos(self.us)
+        self.assertEqual((p["fx_source"], p["fx_used"], p["value_used"]), ("NBP_A", D("3.90"), D("858.0")))          # 2 x 110 x 3,90
+        from invapp.pricing import audit
+        a = audit.run(tm._conn, "BROKER:XTB", ("XTB",))
+        self.assertEqual(a["checks"][0]["status"], "OK", a["checks"][0])                      # kontrola liczy wg tego samego ustawienia
+        self.setting("price_source", "XTB_EXPORT")
+        a = audit.run(tm._conn, "BROKER:XTB", ("XTB",))
+        self.assertEqual(a["checks"][0]["status"], "OK", a["checks"][0]); self.assertIn("eksportu XTB", a["checks"][0]["kontrola"])
+
     def test_without_live_fx_xtb_report_value_is_exact(self):
         p = self.pos(self.us)                                                            # bez notowan i kursow na zywo (tylko awaryjnie raport XTB)
         self.assertEqual((p["price_source"], p["value_used"]), ("XTB_REPORT", D(800)))               # kurs z raportu XTB -> co do grosza jak w raporcie
@@ -210,6 +248,20 @@ class TestNbpAndPrivileges(PricingBase):
         y = YahooProvider(fetch=lambda u: "")
         self.assertEqual([y.symbol_for(s) for s in ("ABC.PL", "XYZ.NL", "ETF.DE", "FND.UK", "AAPL.US", "XYZ.ZZ", "NOSUFFIX")],
                          ["ABC.WA", "XYZ.AS", "ETF.DE", "FND.L", "AAPL", None, None])
+
+    def test_split_events_are_parsed_sorted_and_bad_entries_skipped(self):
+        t1, t2 = int(datetime(2024, 6, 10, 7, tzinfo=timezone.utc).timestamp()), int(datetime(2021, 3, 1, tzinfo=timezone.utc).timestamp())
+        body = {"chart": {"result": [{"meta": {}, "events": {"splits": {str(t1): {"date": t1, "numerator": 10, "denominator": 1},
+                                                                         str(t2): {"date": t2, "numerator": 1, "denominator": 4},
+                                                                         "x": {"date": "zly"}}}}]}}
+        urls = []
+        y = YahooProvider(fetch=lambda u: urls.append(u) or json.dumps(body))
+        from datetime import date
+        self.assertEqual(y.splits("ABC.WA"), [(date(2021, 3, 1), D(1), D(4)), (date(2024, 6, 10), D(10), D(1))])
+        self.assertIn("/chart/ABC.WA?", urls[0]); self.assertIn("events=split", urls[0])
+        self.assertEqual(YahooProvider(fetch=lambda u: json.dumps({"chart": {"result": [{"meta": {}}]}})).splits("ABC.WA"), [])   # brak podzialow
+        with self.assertRaises(ProviderError):
+            YahooProvider(fetch=lambda u: "<html>").splits("ABC.WA")
 
 
 if __name__ == "__main__":

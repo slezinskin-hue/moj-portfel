@@ -226,8 +226,54 @@ class Xtb(Broker):
                                  f"Sprawdź komunikat spółki (raport ESPI/EBI) albo KDPW i podaj dzień podziału" + (f" (najpóźniej {last})." if last else "."),
                         "pola": [{"nazwa": "data", "typ": "date", "etykieta": "Dzień podziału", "max": last},
                                  {"nazwa": "zrodlo", "typ": "text", "etykieta": "Źródło (np. raport ESPI nr …)"}],
-                        "odpowiedzi": [{"wartosc": "tak", "etykieta": f"Potwierdzam split {k}:1"}, {"wartosc": "nie", "etykieta": "To nie był split"}]})
+                        "odpowiedzi": [{"wartosc": "auto", "etykieta": "Zdecyduj za mnie", "bez_pol": True,
+                                        "opis": "Aplikacja przyjmie split: dzień podziału z danych Yahoo (jeśli są), a gdy ich brak – granica z Twoich transakcji. "
+                                                "Oznaczy go jako niesprawdzony oficjalnym źródłem."},
+                                       {"wartosc": "tak", "etykieta": f"Potwierdzam split {k}:1 (podaję dzień i źródło)"},
+                                       {"wartosc": "nie", "etykieta": "To nie był split", "bez_pol": True}]})
         return out
+
+    split_provider = None                                     # podmieniane w testach (bez internetu)
+
+    def _auto_split(self, conn, aid, symbol, k, cutoff, ev):
+        """Decyzja za uzytkownika: split CONFIRMED (niezweryfikowany oficjalnie). Dzien podzialu z Yahoo (zdarzenia korporacyjne), jesli Yahoo zna
+        split o tym samym wspolczynniku najpozniej w dniu granicy z transakcji; inaczej granica z transakcji (pierwsza sprzedaz po podziale)."""
+        from decimal import Decimal
+        from psycopg2.extras import Json
+        from invapp.pricing.providers import YahooProvider
+        cur = conn.cursor()
+        cur.execute("""select coalesce((select m.provider_symbol from listing_provider_symbols m join corporate_actions a on a.listing_id = m.listing_id
+                                        where a.action_id = %s and m.status = 'VERIFIED' order by m.provider limit 1), '')""", (aid,))
+        prov = self.split_provider or YahooProvider()
+        sym = cur.fetchone()[0] or prov.symbol_for(symbol)
+        # ostatni zakup pozycji, ktore zamknieto w ilosci k x kupiona (kupione PRZED podzialem): dzien podzialu musi byc pozniej, inaczej korekta ich nie obejmie
+        refs = [p.get("position") for p in (ev or {}).get("positions", []) if p.get("position")]
+        cur.execute("select max(occurred_at) from transactions where txn_type = 'BUY' and broker_position_ref = any(%s)", (refs,))
+        last_buy = cur.fetchone()[0]
+        found, note = None, None
+        if sym:
+            try:
+                for d, num, den in prov.splits(sym):
+                    if den and (num / den) == Decimal(k) and (cutoff is None or d <= cutoff.date()) and (last_buy is None or d > last_buy.date()):
+                        found = d
+            except Exception as e:  # noqa: BLE001
+                note = f"Yahoo niedostępne ({type(e).__name__})"
+        now = datetime.now(timezone.utc)
+        hist = list((ev or {}).get("history", [])) + [{"at": now.isoformat(), "from": "HYPOTHESIS", "to": "CONFIRMED", "by": "użytkownik: zdecyduj za mnie",
+                                                     "split_date_source": f"Yahoo Finance ({sym})" if found else "granica z transakcji", "note": note}]
+        if found:
+            cur.execute("""update corporate_actions set status='CONFIRMED', source='EXTERNAL', effective_date=%s, effective_date_status='HYPOTHESIS',
+                                  applies_to_lots_opened_before=NULL, evidence = evidence || %s where action_id=%s""",
+                        (found, Json({"history": hist, "auto_decision": {"source": f"Yahoo Finance zdarzenia ({sym})", "date": found.isoformat()}}), aid))
+        else:
+            cur.execute("""update corporate_actions set status='CONFIRMED', evidence = evidence || %s where action_id=%s""",
+                        (Json({"history": hist, "auto_decision": {"source": "granica z transakcji (pierwsza sprzedaż po podziale)"}}), aid))
+        cur.execute("select listing_id from corporate_actions where action_id = %s", (aid,))
+        cur.execute("""update data_quality_issues set status='RESOLVED', resolved_at=now() where code='DQ-06_IMPLICIT_SPLIT' and entity_ref=%s and status='OPEN'""",
+                    (f"listing:{cur.fetchone()[0]}",))
+        self.rebuild_derived(conn)
+        return {"zapisano": True, "split": True, "dzien": found.isoformat() if found else None,
+                "zrodlo_daty": f"Yahoo Finance ({sym})" if found else "transakcje"}
 
     def _answer_split(self, conn, aid, answer, fields):
         from datetime import date
@@ -242,6 +288,8 @@ class Xtb(Broker):
             cur = conn.cursor()
             cur.execute("update corporate_actions set status='REJECTED', evidence = evidence || %s where action_id=%s", (Json({"history": hist}), aid))
             return {"zapisano": True, "split": False}
+        if answer == "auto":
+            return self._auto_split(conn, aid, symbol, k, cutoff, ev)
         if answer != "tak":
             raise ImportFailed("Nieznana odpowiedź.")
         try:

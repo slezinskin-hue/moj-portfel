@@ -1,0 +1,28 @@
+# Proba instalatora bez wydania (recznie: zakladka Actions -> "Test instalatora" -> Run workflow): budowanie instalatora,
+# test na czystym Windowsie i plik instalatora do pobrania jako artefakt (do wlasnych prob przed wydaniem).
+name: Test instalatora
+on:
+  workflow_dispatch:
+
+jobs:
+  instalator:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.10"
+      - name: Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Budowanie instalatora
+        shell: powershell
+        run: |
+          .\instalator\build.ps1 -HostPython python
+          Get-Content dist\build.env | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+      - name: Test instalacji na czystym Windowsie
+        shell: powershell
+        run: .\instalator\test_instalacji.ps1 -Installer "dist\$env:INSTALLER_NAME" -Version $env:APP_VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: instalator
+          path: dist/*.exe*

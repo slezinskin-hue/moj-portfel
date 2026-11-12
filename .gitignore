@@ -6,6 +6,7 @@ __pycache__/
 build/
 dist/
 invapp/_build.py
+.claude/
 
 # --- DANE OSOBISTE (zostaja tylko na tym komputerze, nigdy w repozytorium)
 export/

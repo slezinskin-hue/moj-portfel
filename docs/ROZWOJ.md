@@ -22,7 +22,7 @@ więc zainstalowana aplikacja nie zobaczy „bazy nowszej niż program”.
    Kopia zastępuje dane testowe; dane zainstalowanej aplikacji nie są zmieniane.
 3. **Testy automatyczne** (te same co na GitHubie):
    ```
-   python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton
+   python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc
    ```
    Pełny zestaw na Twoich prawdziwych eksportach (pliki w `export\`, testy lokalne – nie trafiają do repozytorium):
    ```
@@ -36,6 +36,10 @@ więc zainstalowana aplikacja nie zobaczy „bazy nowszej niż program”.
    powershell -ExecutionPolicy Bypass -File instalator\build.ps1 -UpdateRepo "<twoj-login>/moj-portfel"
    ```
    Wynik: `dist\MojPortfel-Setup-X.Y.Z.exe`.
+   Test na **czystym Windowsie** (bez Pythona, bez Twoich danych) robi GitHub: zakładka *Actions* → „Test instalatora” → *Run workflow*
+   (instalacja, start, pusta baza, zabezpieczenia, zatrzymanie, deinstalacja; gotowy instalator do pobrania jako artefakt). Ten sam test
+   uruchamia się automatycznie przed każdym wydaniem – wydanie nie powstanie, jeśli instalacja na czystym systemie nie działa.
+   Skryptu `instalator\test_instalacji.ps1` nie uruchamia się na własnym komputerze (odinstalowuje aplikację – dlatego działa tylko w GitHub Actions).
 5. **Wydanie**: zmień numer w `invapp/__init__.py` (np. `__version__ = "0.3.0"`), zapisz zmiany i wyślij tag z opisem zmian:
    ```
    git add -A
@@ -43,8 +47,9 @@ więc zainstalowana aplikacja nie zobaczy „bazy nowszej niż program”.
    git tag -a v0.3.0 -m "Co nowego: ..."
    git push origin main --follow-tags
    ```
-   GitHub Actions zbuduje instalator i utworzy wydanie (Releases → v0.3.0). Twoja zainstalowana aplikacja i aplikacje innych pokażą
-   „Dostępna nowa wersja 0.3.0”.
+   GitHub Actions zbuduje instalator, przetestuje go na czystym Windowsie i utworzy wydanie (Releases → v0.3.0). Twoja zainstalowana
+   aplikacja i aplikacje innych zapytają „Dostępna nowa wersja 0.3.0 – zaktualizować teraz?” (przy uruchomieniu i co kilka godzin).
+   „Nie teraz” zostawia w nagłówku przycisk **⬆ Aktualizacja**, a na dole strony jest „Sprawdź aktualizacje”.
 
 ## Zasady
 

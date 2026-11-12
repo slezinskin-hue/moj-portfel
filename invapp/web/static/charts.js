@@ -83,10 +83,14 @@
       if (!this.data.length || !this.win) { el('text', {x: lay.W / 2, y: lay.H / 2, 'text-anchor': 'middle', style: 'fill:var(--muted);font-size:13px'}, svg).textContent = 'Brak danych do wykresu'; return; }
       const series = this.o.series.filter(s => !this.hidden.has(s.key));
       const [i0, i1] = this._visible(); const pts = this.data.slice(i0, i1 + 1);
+      // serie "rebase" (poziom indeksu): zwrot liczony od pierwszego widocznego dnia z wartoscia - przy przyblizeniu porownanie startuje od zera
+      this.base = {};
+      for (const s of series) if (s.rebase) { const f = pts.find(p => p[s.key] !== null && p[s.key] !== undefined && p[s.key] > 0); this.base[s.key] = f ? f[s.key] : null; }
+      this.baseT = pts.length ? pts[0].t : null;
       let lo = Infinity, hi = -Infinity;
-      for (const p of pts) for (const s of series) { const v = p[s.key]; if (v !== null && v !== undefined) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+      for (const p of pts) for (const s of series) { const v = this.val(p, s); if (v !== null) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
       if (!isFinite(lo)) { lo = 0; hi = 1; }
-      if (this.o.zeroBased || series.some(s => s.signed)) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+      if (this.o.zeroBased || this.o.includeZero || series.some(s => s.signed)) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
       const pad = (hi - lo || Math.abs(hi) || 1) * 0.07; lo -= (lo === 0 && this.o.zeroBased ? 0 : pad); hi += pad;
       const {L, R, T, plotB, W} = lay, [t0, t1] = this.win;
       const x = t => L + (W - L - R) * (t - t0) / Math.max(1, t1 - t0), y = v => T + (plotB - T) * (1 - (v - lo) / (hi - lo));
@@ -105,11 +109,11 @@
       const plot = el('g', {'clip-path': `url(#${clipId})`}, svg);
       for (const s of series) {
         let dpath = '', started = false;
-        for (const p of pts) { const v = p[s.key]; if (v === null || v === undefined) { started = false; continue; } dpath += (started ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(v).toFixed(1); started = true; }
+        for (const p of pts) { const v = this.val(p, s); if (v === null) { if (!s.connect) started = false; continue; } dpath += (started ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(v).toFixed(1); started = true; }
         if (!dpath) continue;
         if (s.area || s.signed) {
           const base = y(s.signed ? 0 : Math.max(lo, Math.min(0, hi)));
-          const first = pts.find(p => p[s.key] !== null && p[s.key] !== undefined), last = [...pts].reverse().find(p => p[s.key] !== null && p[s.key] !== undefined);
+          const first = pts.find(p => this.val(p, s) !== null), last = [...pts].reverse().find(p => this.val(p, s) !== null);
           const area = dpath + `L${x(last.t).toFixed(1)},${base}L${x(first.t).toFixed(1)},${base}Z`;
           if (s.signed) {
             const y0 = y(0), ida = clipId + 'a', idb = clipId + 'b', defs = svg.querySelector('defs');
@@ -135,6 +139,13 @@
       this.visSeries = series; this.visPts = pts;
       if (this.o.navigator) this._renderNav();
       if (this.o.onRender) this.o.onRender(this);
+    }
+    val(p, s) {
+      const v = p[s.key];
+      if (v === null || v === undefined || isNaN(v)) return null;
+      if (!s.rebase) return v;
+      const b = this.base && this.base[s.key];
+      return b ? v / b - 1 : null;
     }
     _renderNav() {
       const {L, R, W, H, navT} = this.lay, s0 = this.o.series.find(s => !this.hidden.has(s.key) && !s.dash) || this.o.series[0], [a, b] = this.domain();
@@ -162,8 +173,8 @@
       while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m].t < t) lo = m; else hi = m; }
       const p = Math.abs(pts[lo].t - t) < Math.abs(pts[hi].t - t) ? pts[lo] : pts[hi];
       const X = this.x(p.t); this.cross.style.display = ''; const ln = this.cross.firstChild; ln.setAttribute('x1', X); ln.setAttribute('x2', X);
-      this.visSeries.forEach((s, i) => { const v = p[s.key]; const c = this.dots[i]; if (v === null || v === undefined) { c.style.display = 'none'; return; } c.style.display = ''; c.setAttribute('cx', X); c.setAttribute('cy', this.y(v)); });
-      const html = this.o.fmtTip ? this.o.fmtTip(p, this.visSeries) : '<b>' + fmtDate(p.t) + '</b>' + this.visSeries.map(s => `<div class="r"><span><span class="sw" style="background:${s.color}"></span>${s.label}</span><b>${this.o.fmtY(p[s.key])}</b></div>`).join('');
+      this.visSeries.forEach((s, i) => { const v = this.val(p, s); const c = this.dots[i]; if (v === null) { c.style.display = 'none'; return; } c.style.display = ''; c.setAttribute('cx', X); c.setAttribute('cy', this.y(v)); });
+      const html = this.o.fmtTip ? this.o.fmtTip(p, this.visSeries, this) : '<b>' + fmtDate(p.t) + '</b>' + this.visSeries.map(s => `<div class="r"><span><span class="sw" style="background:${s.color}"></span>${s.label}</span><b>${this.o.fmtY(this.val(p, s))}</b></div>`).join('');
       this.tip.innerHTML = html; this.tip.style.display = 'block';
       const bw = this.box.clientWidth, tw = this.tip.offsetWidth; let left = X + 14; if (left + tw > bw) left = X - tw - 14;
       this.tip.style.left = Math.max(0, left) + 'px'; this.tip.style.top = (this.lay.T + 4) + 'px';

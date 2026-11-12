@@ -24,13 +24,27 @@ def release(tag, url=URL, sha=SHA, digest=None):
 
 class TestUpdates(unittest.TestCase):
     def setUp(self):
-        self.orig = updates.build_info
+        self.orig = updates.build_info, updates.FORCE_MIN_INTERVAL
         updates.build_info = lambda: INFO
+        updates.FORCE_MIN_INTERVAL = 0
         updates._cache.update(at=0.0, data=None, release=None)
 
     def tearDown(self):
-        updates.build_info = self.orig
+        updates.build_info, updates.FORCE_MIN_INTERVAL = self.orig
         updates._cache.update(at=0.0, data=None, release=None)
+
+    def test_check_now_is_throttled_and_regular_check_is_cached(self):
+        calls = []
+
+        def fetch(url):
+            calls.append(url); return release("v9.9.9")
+        updates.FORCE_MIN_INTERVAL = 30
+        self.assertTrue(updates.check(force=True, fetch=fetch)["dostepna"])
+        self.assertTrue(updates.check(force=True, fetch=fetch)["dostepna"])         # "Sprawdz teraz" klikniete znowu po chwili: z pamieci
+        self.assertTrue(updates.check(fetch=fetch)["dostepna"])                     # zwykle sprawdzenie (co kilka godzin): z pamieci
+        self.assertEqual(len(calls), 1)
+        updates._cache["at"] -= 31
+        updates.check(force=True, fetch=fetch); self.assertEqual(len(calls), 2)   # po 30 s znowu pyta GitHuba
 
     def test_versions(self):
         self.assertEqual(updates.parse_version("v1.2.10"), (1, 2, 10))
@@ -87,6 +101,23 @@ class TestStartMode(unittest.TestCase):
         self.assertEqual(choose_mode(NS(no_browser=True, przegladarka=False), True), "bez-okna")
         from invapp.__main__ import ICON
         self.assertTrue(os.path.exists(ICON))                                                            # ikona okna jest w pakiecie programu
+
+    def test_app_on_other_data_dir_is_not_ours(self):
+        import io, json as _j
+        from unittest import mock
+        import invapp.__main__ as m
+        from invapp import APP_NAME, config
+
+        def reply(body):
+            r = mock.MagicMock(); r.__enter__.return_value = io.BytesIO(_j.dumps(body).encode()); return r
+        with mock.patch("urllib.request.urlopen", return_value=reply({"aplikacja": APP_NAME, "wersja": "9.9.9", "dane_id": config.data_id()})):
+            self.assertEqual(m.our_app_running(8000), "9.9.9")
+        with mock.patch("urllib.request.urlopen", return_value=reply({"aplikacja": APP_NAME, "wersja": "9.9.9", "dane_id": "0" * 16})):
+            self.assertIsNone(m.our_app_running(8000))                        # np. zainstalowana aplikacja, a uruchamiamy wersje na innych danych
+        with mock.patch("urllib.request.urlopen", return_value=reply({"aplikacja": APP_NAME, "wersja": "0.2.1"})):
+            self.assertEqual(m.our_app_running(8000), "0.2.1")                # starsza wersja bez dane_id (aktualizacja na tych samych danych)
+        with mock.patch("urllib.request.urlopen", return_value=reply({"aplikacja": "cos innego", "wersja": "1.0.0"})):
+            self.assertIsNone(m.our_app_running(8000))
 
     def test_running_other_version_is_replaced_same_version_is_shown(self):
         from unittest import mock

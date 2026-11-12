@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
-from invapp import APP_NAME, __version__, brokers
+from invapp import APP_NAME, __version__, brokers, config
 from invapp.core.common import ImportFailed
 from invapp.db import engine
 from invapp.web import dashboard as preview
@@ -20,6 +20,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 app = FastAPI(title="Mój Portfel", docs_url=None, redoc_url=None, openapi_url=None)
 templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+# Strona tylko z wlasnych plikow: bez zewnetrznych skryptow, bez osadzania w cudzych stronach, zapytania tylko do tej aplikacji.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+       "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
+
+
+def _hostname(value):
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(value if "//" in value else "//" + value).hostname or ""
+    except ValueError:
+        return ""
+
+
+@app.middleware("http")
+async def _local_only(request: Request, call_next):
+    """Bezpieczenstwo (decyzja uzytkownika 2026-11-12: "nikt nie udostepni danych przez przypadek"):
+    * serwer slucha tylko na 127.0.0.1 (config.HOST), a dodatkowo przyjmuje wylacznie naglowek Host = 127.0.0.1/localhost - obca strona otwarta
+      w przegladarce nie odczyta danych przez podstawienie swojej domeny pod adres 127.0.0.1 (atak "DNS rebinding");
+    * zadanie z obcej strony (naglowek Origin innej witryny) jest odrzucane - takze odczyt;
+    * naglowki: zakaz osadzania strony w ramce, bez zewnetrznych skryptow (CSP), bez wysylania adresu strony dalej (Referrer-Policy), bez zapisu w pamieci podrecznej."""
+    from fastapi.responses import PlainTextResponse
+    if _hostname(request.headers.get("host") or "") not in LOCAL_HOSTS:
+        return PlainTextResponse("Aplikacja jest dostępna tylko pod adresem 127.0.0.1.", status_code=400)
+    origin = request.headers.get("origin")
+    if origin and origin != "null" and _hostname(origin) not in LOCAL_HOSTS:
+        return PlainTextResponse("Żądanie z obcej strony – odrzucone.", status_code=403)
+    resp = await call_next(request)
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Content-Security-Policy"] = CSP
+    resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    if request.url.path.startswith("/api/") or request.url.path == "/podglad":
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")      # wyglad i wykresy (bez zewnetrznych bibliotek)
 STATIC_V = str(int(max(os.path.getmtime(os.path.join(HERE, "static", f)) for f in os.listdir(os.path.join(HERE, "static")))))   # nowa wersja plikow = nowy adres (bez starej kopii w przegladarce)
 
@@ -87,8 +123,7 @@ def _jsonable(obj):
 
 def _same_origin(request):
     """Ochrona przed zapisem z obcych stron: wymagany naglowek niestandardowy (przegladarka nie wysle go z formularza innej witryny) i host lokalny."""
-    host = (request.headers.get("host") or "").split(":")[0]
-    return request.headers.get("x-requested-with") == "invapp" and host in ("127.0.0.1", "localhost")
+    return request.headers.get("x-requested-with") == "invapp" and _hostname(request.headers.get("host") or "") in LOCAL_HOSTS
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -315,6 +350,111 @@ def _focus_native_window():
     return True
 
 
+@app.get("/api/eksport.xlsx")
+def api_export_xlsx(scope: str = "all"):
+    """Eksport do Excela: plik budowany w pamieci i oddawany oknu aplikacji (okno "Zapisz jako"); aplikacja go nigdzie nie wysyla ani nie zapisuje sama."""
+    from fastapi.responses import Response
+    from invapp.web import export_xlsx
+    data, name = export_xlsx.build(scope)
+    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+@app.get("/api/ekspozycja")
+def api_exposure(scope: str = "all"):
+    try:
+        return JSONResponse(_jsonable(preview.exposure_data(scope)))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"blad": type(e).__name__}, status_code=503)
+
+
+@app.get("/api/gotowka")
+def api_cash():
+    """Zakladka Gotowka: konta bankowe (wpisane recznie), wolne srodki XTB (z ksiegi), lokaty, ustawienia."""
+    try:
+        return JSONResponse(_jsonable(preview.cash_data()))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"blad": type(e).__name__}, status_code=503)
+
+
+async def _cash_write(request, fn):
+    """Zapis gotowki/ustawien: tylko z naglowkiem ochronnym, przez wlasciciela bazy (rola aplikacji ma tylko odczyt tych tabel)."""
+    if not _same_origin(request):
+        return JSONResponse({"blad": "niedozwolone zadanie"}, status_code=403)
+    from invapp.core import cash
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    conn = importing.owner_conn()
+    try:
+        res = fn(conn.cursor(), cash, body); conn.commit()
+    except cash.CashError as e:
+        conn.rollback(); return JSONResponse({"blad": str(e)}, status_code=422)
+    except Exception as e:  # noqa: BLE001
+        conn.rollback(); return JSONResponse({"blad": f"Nie udało się zapisać ({type(e).__name__})."}, status_code=500)
+    finally:
+        conn.close()
+    preview.invalidate_caches()
+    return JSONResponse(_jsonable(res if res is not None else {"zapisano": True}))
+
+
+@app.post("/api/gotowka/konto")
+async def api_cash_add(request: Request):
+    return await _cash_write(request, lambda cur, cash, b: {"id": cash.add_account(cur, b.get("nazwa"), b.get("waluta"), b.get("saldo"), b.get("na_dzien"))})
+
+
+@app.post("/api/gotowka/konto/{aid}/saldo")
+async def api_cash_balance(aid: int, request: Request):
+    return await _cash_write(request, lambda cur, cash, b: cash.set_balance(cur, aid, b.get("saldo"), b.get("na_dzien")))
+
+
+@app.post("/api/gotowka/konto/{aid}/usun")
+async def api_cash_archive(aid: int, request: Request):
+    return await _cash_write(request, lambda cur, cash, b: cash.archive(cur, aid))
+
+
+@app.post("/api/ustawienia")
+async def api_settings(request: Request):
+    return await _cash_write(request, lambda cur, cash, b: {"ustawienia": cash.set_setting(cur, str(b.get("klucz")), b.get("wartosc"))})
+
+
+@app.post("/api/ceny/odswiez")
+async def api_prices_refresh(request: Request):
+    """Rozwiazanie z kontroli liczb: ponowne pobranie cen i weryfikacja symboli (zadanie w tle)."""
+    if not _same_origin(request):
+        return JSONResponse({"blad": "niedozwolone zadanie"}, status_code=403)
+    return JSONResponse({"uruchomiono": importing.start_background_pricing()})
+
+
+@app.post("/api/przelicz")
+async def api_rebuild(request: Request):
+    """Rozwiazanie z kontroli liczb: przeliczenie partii, korekt i klasyfikacji od nowa z danych z eksportow (deterministycznie; dane surowe bez zmian)."""
+    if not _same_origin(request):
+        return JSONResponse({"blad": "niedozwolone zadanie"}, status_code=403)
+
+    def work():
+        with importing._import_lock:                       # nie w trakcie importu pliku
+            conn = importing.owner_conn()
+            try:
+                out = {}
+                for b in brokers.BROKERS:
+                    out[b.key] = bool(b.rebuild_derived(conn) is not None)
+                conn.commit()
+                return out
+            except Exception:
+                conn.rollback(); raise
+            finally:
+                conn.close()
+    try:
+        res = await run_in_threadpool(work)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"blad": f"Nie udało się przeliczyć ({type(e).__name__})."}, status_code=500)
+    preview.invalidate_caches(); importing.start_background_pricing()
+    return JSONResponse({"przeliczono": res})
+
+
 @app.get("/api/aktualizacja")
 def api_update_check(force: bool = False):
     """Czy jest nowsza wersja na GitHubie (Releases repozytorium)? Tylko odczyt; brak internetu = brak informacji."""
@@ -337,4 +477,4 @@ async def api_update_install(request: Request):
 
 @app.get("/zdrowie")
 def health():
-    return JSONResponse({"aplikacja": APP_NAME, "wersja": __version__, "status": "dziala", "baza": db_status()})
+    return JSONResponse({"aplikacja": APP_NAME, "wersja": __version__, "status": "dziala", "baza": db_status(), "dane_id": config.data_id()})

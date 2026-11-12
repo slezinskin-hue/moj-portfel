@@ -47,6 +47,12 @@ def data_dir() -> Path:
     return p
 
 
+def data_id() -> str:
+    """Krotki identyfikator katalogu danych (skrot sciezki) - zeby uruchamiana aplikacja nie uznala za "swoja" aplikacji dzialajacej na INNYCH danych."""
+    import hashlib
+    return hashlib.sha256(str(data_dir().resolve()).lower().encode("utf-8")).hexdigest()[:16]
+
+
 def pgdata_dir() -> Path:
     return data_dir() / "baza"
 

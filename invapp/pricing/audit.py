@@ -14,6 +14,25 @@ def _dec(x):
     return D(str(x)) if x is not None else D(0)
 
 
+def _settings(cur):
+    """Ustawienia wyceny (migracja 0017); baza bez tabeli ustawien -> domyslne (Yahoo, kurs na zywo)."""
+    from invapp.core import cash
+    cur.execute("select to_regclass('app_settings') is not null")
+    return cash.get_settings(cur) if cur.fetchone()[0] else dict(cash.DEFAULTS)
+
+
+def _fx(cur, ccy, source):
+    """Kurs {ccy}/PLN: domyslnie najnowszy na zywo, a gdy brak - NBP; przy ustawieniu NBP odwrotnie."""
+    live = "select rate from fx_quotes where base = %s and quote = 'PLN' order by quoted_at desc limit 1"
+    nbp = "select rate from fx_rates where base = %s and quote = 'PLN' and source = 'NBP_A' order by rate_date desc limit 1"
+    for q in ((nbp, live) if source == "NBP" else (live, nbp)):
+        cur.execute(q, (ccy,))
+        r = cur.fetchone()
+        if r:
+            return _dec(r[0])
+    return None
+
+
 def run(conn, scope_code, brokers=("XTB", "TR")):
     cur = conn.cursor(); checks = []
 
@@ -29,11 +48,13 @@ def run(conn, scope_code, brokers=("XTB", "TR")):
     cur.execute("select sa.account_id from scope_accounts sa join scopes sc using (scope_id) where sc.code = %s", (scope_code,))
     accounts = [r[0] for r in cur.fetchall()]
 
-    # 1. niezalezne przeliczenie wartosci kazdej pozycji: ilosc x cena z API x kurs
+    # 1. niezalezne przeliczenie wartosci kazdej pozycji: ilosc x cena z API x kurs (albo - przy ustawieniu "ceny z eksportu XTB" - wartosc z raportu XTB,
+    #    gdy ilosc w raporcie = ilosc w ksiedze); kurs wg ustawienia (na zywo albo NBP)
+    st = _settings(cur)
     cur.execute("""select dl.listing_id, sum(dl.qty_remaining), (select min(la.broker_symbol) from listing_aliases la where la.listing_id = dl.listing_id and la.valid_to is null)
                    from derived_lots dl where dl.account_id = any(%s) group by dl.listing_id having sum(dl.qty_remaining) > 0.00000001""", (accounts,))
     positions = cur.fetchall()
-    expected_total, bad, missing = D(0), [], []
+    expected_total, bad, missing, from_broker = D(0), [], [], 0
     for listing_id, qty, ticker in positions:
         cur.execute("""select q.price, q.currency, q.price_unit from market_quotes q join listing_provider_symbols m
                          on m.listing_id = q.listing_id and m.provider = q.provider and m.status = 'VERIFIED'
@@ -41,27 +62,32 @@ def run(conn, scope_code, brokers=("XTB", "TR")):
         qt = cur.fetchone()
         cur.execute("select coalesce(sum(value_used), 0), bool_or(value_source = 'LIVE') from v_live_position_values where listing_id = %s and account_id = any(%s)", (listing_id, accounts))
         shown, is_live = cur.fetchone()
-        if not qt:
+        exp, unresolved = D(0), False
+        cur.execute("select account_id, sum(qty_remaining) from derived_lots where listing_id = %s and account_id = any(%s) group by 1 having sum(qty_remaining) > 0", (listing_id, accounts))
+        for acc, aqty in cur.fetchall():
+            if st["price_source"] == "XTB_EXPORT":
+                cur.execute("""select s.value_cash, s.volume from broker_position_snapshots s
+                               where s.account_id = %s and s.listing_id = %s and s.row_level = 'INSTRUMENT'
+                                 and s.as_of = (select max(as_of) from broker_position_snapshots where account_id = %s and row_level = 'INSTRUMENT')""", (acc, listing_id, acc))
+                sn = cur.fetchone()
+                if sn and sn[1] is not None and abs(_dec(sn[1]) - _dec(aqty)) <= D("0.00000001"):
+                    exp += _dec(sn[0]); from_broker += 1; continue
+            if not qt:
+                unresolved = True; continue
+            price, ccy, unit = qt
+            price = _dec(price) / (100 if unit == "MINOR_1_100" else 1)
+            fx = D(1) if ccy == "PLN" else _fx(cur, ccy, st["fx_source"])
+            if fx is None:
+                unresolved = True; continue
+            exp += _dec(aqty) * price * fx
+        if unresolved:
             missing.append(ticker); continue
-        price, ccy, unit = qt
-        price = _dec(price) / (100 if unit == "MINOR_1_100" else 1)
-        if ccy == "PLN":
-            fx = D(1)
-        else:
-            cur.execute("select rate from fx_quotes where base = %s and quote = 'PLN' order by quoted_at desc limit 1", (ccy,))
-            r = cur.fetchone()
-            if not r:
-                cur.execute("select rate from fx_rates where base = %s and quote = 'PLN' and source = 'NBP_A' order by rate_date desc limit 1", (ccy,))
-                r = cur.fetchone()
-            fx = _dec(r[0]) if r else None
-        if fx is None:
-            missing.append(f"{ticker} (brak kursu {ccy})"); continue
-        exp = _dec(qty) * price * fx
         expected_total += exp
         if abs(exp - _dec(shown)) > TOL:
-            bad.append(f"{ticker}: ilość {qty} × cena {price} {ccy} × kurs {fx} = {exp.quantize(TOL)}, aplikacja pokazuje {_dec(shown).quantize(TOL)}")
-    add("Wartość każdej pozycji = ilość × cena z API × kurs (przeliczone niezależnie z tabel bazowych)", not bad,
-        "; ".join(bad) if bad else f"{len(positions) - len(missing)} pozycji zgodnych co do 0,01 zł")
+            bad.append(f"{ticker}: ilość {qty}, przeliczone {exp.quantize(TOL)}, aplikacja pokazuje {_dec(shown).quantize(TOL)}")
+    src = "wartość z ostatniego eksportu XTB" if st["price_source"] == "XTB_EXPORT" else "ilość × cena z API × kurs"
+    add(f"Wartość każdej pozycji = {src} (przeliczone niezależnie z tabel bazowych)", not bad,
+        "; ".join(bad) if bad else f"{len(positions) - len(missing)} pozycji zgodnych co do 0,01 zł" + (f" (z eksportu XTB: {from_broker})" if from_broker else ""))
     add("Wszystkie pozycje mają cenę rynkową z API", not missing, ("brak ceny: " + ", ".join(missing)) if missing else "", "OSTRZEZENIE")
     shown_total = _dec(s["securities_value"])
     add("Wartość portfela (suma pozycji) = suma niezależnie przeliczonych wartości", abs(shown_total - expected_total) <= TOL if not missing else True,

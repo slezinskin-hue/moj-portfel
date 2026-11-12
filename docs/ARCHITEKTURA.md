@@ -65,6 +65,31 @@ tests/                      testy publiczne (dane syntetyczne; wbudowany Postgre
 * **Kontrole**: saldo z widoku SQL = saldo w modelu; model odtwarza wypłaty; papiery + lokata − wpłaty netto z banku = zysk z inwestycji + dochody
   (tożsamość konta); WSZYSTKIE = suma brokerów.
 
+## Wersja 0.3.0: ustawienia, gotówka, porównania, diagnoza
+
+* **Ustawienia** (`app_settings`, migracja 0017; `core/cash.py`). Domyślnie wszystko jak w 0.2 – żadna liczba się nie zmienia, dopóki
+  użytkownik czegoś nie włączy:
+  * `price_source`: `YAHOO` (cena rynkowa na żywo) albo `XTB_EXPORT` – pozycje XTB wyceniane **dokładnie** wartością z ostatniego eksportu XTB
+    (ceny i kursy XTB z chwili eksportu), o ile ilość w raporcie = ilość w księdze; inaczej cena z Yahoo. XTB nie ma publicznego API cen,
+    dlatego „ceny XTB” pochodzą z eksportu. Różnica wobec Yahoo to zwykle 0,1–0,5% (XTB wycenia po bid i swoim kursie walut).
+  * `fx_source`: `YAHOO` (kurs na żywo, zapas NBP) albo `NBP` (średni kurs tabeli A, zapas na żywo).
+  * Widok `v_live_position_values` (migracja 0018) czyta ustawienia; kontrola liczb (`pricing/audit.py`) liczy niezależnie według tych samych.
+    Zmienia się tylko bieżąca wycena; historia na wykresie zawsze z cen zamknięcia Yahoo.
+  * `include_cash`, `include_xtb_free`: gotówka z kont bankowych (wpisywana ręcznie, tylko zakładka WSZYSTKIE) i wolne środki XTB (saldo
+    gotówki z księgi) **doliczane tylko do bieżącej wartości portfela** (kafelek, alokacja). Zysk, wpłaty, wykresy i wskaźniki bez zmian
+    (`assets_value` = inwestycje; `total_value` = inwestycje + włączona gotówka).
+* **Zwrot %** (`pricing/metrics.return_series`): TWR i TWR z dywidendami (indeksy, przeliczane od początku widocznego okresu), zysk / wpłaty
+  netto, zysk / suma wpłat, XIRR od początku do dnia (co tydzień), CAGR. Ostatni punkt każdej miary = wartość z kafelków (test).
+* **Indeksy** (`pricing/benchmarks.py`, migracja 0016): Nasdaq-100 (^NDX), S&P 500 (^GSPC), MSCI World (^990100-USD-STRD) – indeksy cenowe;
+  WIG20 – ETF Beta WIG20TR (Yahoo nie podaje historii indeksu WIG20). Waluta indeksu z konfiguracji, sprawdzana z Yahoo; w PLN kursem dnia.
+* **Ekspozycja** (`pricing/profiles.py`, migracja 0019): typ, sektor i giełda wg wyszukiwarki Yahoo (tylko symbol), odświeżane co 30 dni.
+* **Diagnoza kontroli liczb** (`pricing/diagnose.py`): przy każdej uwadze prawdopodobna przyczyna i rozwiązania z istniejących mechanizmów –
+  odpowiedź na pytanie brokera (np. split „Zdecyduj za mnie”, waluta .PL), ponowne pobranie cen, przeliczenie partii od nowa z eksportów
+  (`POST /api/przelicz`), wczytanie brakującego pliku. Żadna kwota nie jest korygowana ręcznie.
+* **Split „Zdecyduj za mnie”** (`brokers/xtb/broker._auto_split`): dzień podziału z historii splitów Yahoo, jeśli współczynnik się zgadza
+  i dzień leży między ostatnim zakupem a pierwszą sprzedażą po podziale; inaczej granica z transakcji. Zawsze oznaczony jako niesprawdzony
+  w źródle oficjalnym (`official_source_status = NOT_VERIFIED`).
+
 ## Wydajność
 
 * Specyfikacja instrumentów XTB (PDF ~35 s) jest pobierana w tle, nie w trakcie importu – import pliku XTB trwa 1–3 s.

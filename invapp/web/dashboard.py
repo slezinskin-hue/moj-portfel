@@ -6,6 +6,7 @@ Zakladki tworza sie z listy brokerow (invapp.brokers.BROKERS) + zakladka WSZYSTK
 """
 import threading
 import time as _time
+from datetime import date
 
 import psycopg2
 import psycopg2.extras
@@ -173,6 +174,9 @@ def live_data(scope_key="all"):
                 r["value_native"] = r["qty"] * per_unit
                 fx = 1 if r["currency"] == "PLN" else r["fx_used"]                                 # kurs z API (Yahoo, a gdy brak - NBP); PLN = 1
                 r["price_pln"] = per_unit * fx if fx is not None else None
+            elif r["price_source"] == "XTB_EXPORT" and r["value"] is not None and r["qty"]:
+                r["value_native"] = None
+                r["price_pln"] = r["value"] / r["qty"]                                          # ustawienie "ceny z eksportu XTB": cena w PLN wg XTB
             else:
                 r["value_native"] = None
             r["accounts"] = by_acc.get(r["listing_id"], [])
@@ -181,7 +185,65 @@ def live_data(scope_key="all"):
         deps = deposits_of(conn, code)
         if scope is not None:
             add_deposits(scope, deps)
+            add_cash(scope, conn, normalize_scope(scope_key), code)
         return {"scope": scope, "positions": positions, "deposits": deps["items"]}
+    finally:
+        conn.close()
+
+
+def add_cash(scope, conn, scope_key, code):
+    """Wartosc CALEGO portfela (kafelek) = aktywa inwestycyjne + gotowka z kont bankowych i wolne srodki XTB - tylko gdy wlaczone w ustawieniach
+    (core/cash.py; domyslnie wylaczone). assets_value (inwestycje) zostaje bez zmian - z niego licza sie wykres i wskazniki."""
+    from invapp.core import cash
+    try:
+        ex = cash.extra_value(conn.cursor(), scope_key, code)
+    except psycopg2.Error:              # baza sprzed migracji 0017
+        conn.rollback(); ex = {"gotowka": 0, "wolne_xtb": 0, "ustawienia": dict(cash.DEFAULTS)}
+    scope["cash_value"], scope["xtb_free_value"] = ex["gotowka"], ex["wolne_xtb"]
+    scope["total_value"] = scope["assets_value"] + ex["gotowka"] + ex["wolne_xtb"]
+    scope["settings"] = ex["ustawienia"]
+
+
+def exposure_data(scope_key="all"):
+    """Zakladka Ekspozycja: pozycje (wartosc jak na stronie glownej - v_live_position_values) z waluta notowania, typem, sektorem i gielda.
+    Profil (sektor, gielda wg Yahoo) - migracja 0019; baza bez profili -> pola puste."""
+    code = scope_code(normalize_scope(scope_key))
+    conn = _connect(readonly=True)
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        prof = "listing_profile" if _has_table(cur, "listing_profile") else None
+        cur.execute(f"""select l.listing_id, (select min(la.broker_symbol) from listing_aliases la where la.listing_id = l.listing_id and la.valid_to is null) as ticker,
+                               l.display_name as instrument, coalesce(l.trading_currency, max(p.quote_currency)) as currency, s.asset_class,
+                               sum(p.value_used) as value,
+                               (select m.reference_exchange from listing_provider_symbols m where m.listing_id = l.listing_id and m.provider = 'YAHOO' and m.status = 'VERIFIED') as ref_exchange
+                               {", max(pf.quote_type) as quote_type, max(pf.sector) as sector, max(pf.industry) as industry, max(pf.exchange) as exchange" if prof else ""}
+                        from v_live_position_values p join listings l using (listing_id) join securities s using (security_id)
+                        {"left join listing_profile pf on pf.listing_id = l.listing_id" if prof else ""}
+                        where p.account_id in (select sa.account_id from scope_accounts sa join scopes sc using (scope_id) where sc.code = %s)
+                        group by l.listing_id, l.display_name, l.trading_currency, s.asset_class having sum(p.value_used) is not null
+                        order by sum(p.value_used) desc""", (code,))
+        return {"pozycje": [dict(r) for r in cur.fetchall()]}
+    finally:
+        conn.close()
+
+
+def _has_table(cur, name):
+    cur.execute("select to_regclass(%s) is not null as ok", (name,))
+    r = cur.fetchone()
+    return bool(r["ok"] if isinstance(r, dict) else r[0])
+
+
+def cash_data(scope_key="all"):
+    from invapp.core import cash
+    scope_key = normalize_scope(scope_key)
+    conn = _connect(readonly=True)
+    try:
+        cur = conn.cursor()
+        konta = cash.accounts(cur)
+        wolne = cash.broker_free_funds(cur, scope_code("all"))
+        return {"ustawienia": cash.get_settings(cur), "konta": konta, "waluty": list(cash.CURRENCIES),
+                "suma_kont": sum((a["wartosc_pln"] or 0 for a in konta), 0), "wolne_xtb": wolne, "suma_wolnych": sum((w["saldo"] for w in wolne), 0),
+                "lokaty": deposits_of(conn, scope_code("all"))["items"]}
     finally:
         conn.close()
 
@@ -212,9 +274,14 @@ def history_data(scope_key="all"):
         hit = _cache["hist"].get(code)
         if hit and _time.time() - hit[0] < HIST_TTL:
             return hit[1]
+    from invapp.pricing import benchmarks
     conn = _connect(readonly=True)
     try:
         s = history.build_series(conn, code)
+        try:                                                    # indeksy do porownania (wykres "Zwrot %"), w PLN, na dni serii
+            s["porownanie"] = benchmarks.levels(conn, [date.fromisoformat(p["date"]) for p in s["series"]])
+        except psycopg2.Error:
+            conn.rollback(); s["porownanie"] = None
     finally:
         conn.close()
     with _lock:
@@ -279,10 +346,22 @@ def income_monthly(scope_key="all"):
 
 
 def audit_data(scope_key="all"):
-    from invapp.pricing import audit
+    from invapp.pricing import audit, diagnose
+    from invapp.web import importing
     scope_key = normalize_scope(scope_key)
     conn = _connect(readonly=True)
     try:
-        return audit.run(conn, scope_code(scope_key), _brokers_of(scope_key))
+        res = audit.run(conn, scope_code(scope_key), _brokers_of(scope_key))
+        if not res.get("ok", True):                         # uwagi: przyczyna i proponowane rozwiazanie (pytania brokerow czyta wlasciciel bazy, jak /api/pytania)
+            try:
+                oc = importing.owner_conn()
+                try:
+                    questions = importing.pending_questions(oc)
+                finally:
+                    oc.close()
+                diagnose.annotate(conn.cursor(), res, questions, scope_code(scope_key))
+            except Exception:  # noqa: BLE001  - diagnoza nie moze zablokowac samej kontroli
+                conn.rollback()
+        return res
     finally:
         conn.close()

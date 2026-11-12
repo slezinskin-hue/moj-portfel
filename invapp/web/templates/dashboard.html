@@ -21,18 +21,24 @@
     <span class="spacer"></span>
     <span id="audit-top" class="status"></span>
     <span id="status" class="status"><span class="led"></span><span>…</span></span>
+    <button id="upd-btn" class="btn upd-pill" style="display:none" title="Dostępna nowa wersja – kliknij, aby zaktualizować"></button>
     <button id="refresh" class="icon-btn" title="Odśwież ceny teraz">⟳</button>
     <button id="theme" class="icon-btn" title="Jasny / ciemny motyw">◐</button>
+    <button id="settings-btn" class="icon-btn" title="Ustawienia (źródło cen i kursów, gotówka)">⚙</button>
     <button id="quit" class="icon-btn" title="Zamknij aplikację (serwer i bazę)">⏻</button>
     <button class="btn primary open-import">＋ Wczytaj pliki</button>
   </div>
   {% if d.has_data %}
-  <nav class="subnav"><a href="#przeglad">Przegląd</a><a href="#wykres">Wykres</a><a href="#pozycje">Pozycje</a><a href="#wskazniki">Wskaźniki</a><a href="#dochody">Dochody</a><a href="#szczegoly">Szczegóły i kontrola</a></nav>
+  <nav class="subnav">
+    <a class="vtab on" data-v="portfel" href="#/portfel">Portfel</a><a class="vtab" data-v="ekspozycja" href="#/ekspozycja">Ekspozycja</a><a class="vtab" data-v="gotowka" href="#/gotowka">Gotówka</a><a class="vtab" data-v="symulacje" href="#/symulacje">Symulacje</a>
+    <span class="secnav"><span class="sep"></span><a href="#przeglad">Przegląd</a><a href="#wykres">Wykres</a><a href="#pozycje">Pozycje</a><a href="#wskazniki">Wskaźniki</a><a href="#dochody">Dochody</a><a href="#szczegoly">Szczegóły i kontrola</a></span>
+    <span class="spacer"></span><span class="exp-btns"><button class="btn ghost" id="exp-xlsx" title="Pobierz arkusz Excel z pozycjami, historią, dochodami i wskaźnikami">⤓ Excel</button><button class="btn ghost" id="exp-pdf" title="Raport do druku lub zapisu jako PDF">⎙ PDF</button></span>
+  </nav>
   {% endif %}
 </header>
 
 <main>
-  <div id="update-banner"></div>
+  <div id="print-head" class="print-only"></div>
   <div id="questions"></div>
 
   {% if d.empty or not d.has_data %}
@@ -49,9 +55,10 @@
   </section>
   {% else %}
 
+  <div class="view" data-view="portfel">
   <section id="przeglad">
     <div class="kpis">
-      <div class="kpi hero"><div class="l">Wartość portfela{% if d.scope_key != 'xtb' %} (papiery + lokaty){% endif %}</div><div class="v" id="k-value"><span class="skeleton"></span></div><div class="s" id="k-value-s"></div><div id="k-day" style="margin-top:6px"></div></div>
+      <div class="kpi hero"><div class="l" id="k-value-l">Wartość portfela{% if d.scope_key != 'xtb' %} (papiery + lokaty){% endif %}</div><div class="v" id="k-value"><span class="skeleton"></span></div><div class="s" id="k-value-s"></div><div id="k-day" style="margin-top:6px"></div></div>
       <div class="kpi"><div class="l">Zysk całkowity <span class="info" data-t="Zysk z inwestycji (niezrealizowany + zrealizowany) + dywidendy, odsetki, nagrody i opłaty Procent liczony od wpłaconych środków netto (wartość − zysk).">i</span></div><div class="v" id="k-total"><span class="skeleton"></span></div><div class="s" id="k-total-s"></div></div>
       <div class="kpi"><div class="l">Zysk z inwestycji <span class="info" data-t="Niezrealizowany (wartość − koszt otwartych pozycji) + zrealizowany ze sprzedaży. Koszt = gotówka z księgi z opłatami (nie koszt podatkowy).">i</span></div><div class="v" id="k-inv"><span class="skeleton"></span></div><div class="s" id="k-inv-s"></div></div>
       <div class="kpi"><div class="l">Dywidendy, odsetki i inne <span class="info" data-t="Kwoty netto z księgi (po podatku pobranym przez brokera) – tylko wypłacone.">i</span></div><div class="v" id="k-inc"><span class="skeleton"></span></div><div class="s" id="k-inc-s"></div></div>
@@ -67,6 +74,10 @@
         <span class="zoomnote" id="zoom-reset" style="display:none">✕ pokaż cały okres</span>
         <div class="seg" id="range"><button data-k="1M">1M</button><button data-k="3M">3M</button><button data-k="6M">6M</button><button data-k="YTD">YTD</button><button data-k="1R">1R</button><button data-k="3L">3L</button><button data-k="ALL" class="on">Max</button></div>
       </div>
+    </div>
+    <div class="pct-tools" id="pct-tools" style="display:none">
+      <div class="row"><span class="lbl">Miary</span><span class="chips" id="pct-measures"></span></div>
+      <div class="row"><span class="lbl">Porównaj z</span><span class="chips" id="pct-bench"></span></div>
     </div>
     <div id="chart" style="min-height:380px"></div>
     <div class="legend" id="legend"></div>
@@ -190,7 +201,47 @@
     <p><b>Zysk z inwestycji</b> = niezrealizowany (wartość − koszt pozostałych pozycji) + zrealizowany ze sprzedaży. <b>Dywidendy, odsetki, nagrody i opłaty</b> są osobno; razem z zyskiem z inwestycji dają <b>zysk całkowity</b>. Koszt to gotówka z księgi (z opłatami), nie koszt podatkowy.</p>
     <p><b>Wykres i wskaźniki</b>: dla kont bez lokaty wpłata = zakup, wypłata = sprzedaż; dla konta z lokatą wpłata = przelew na konto, wypłata = przelew z konta, a odsetki są zwrotem. Dywidendy i nagrody są dochodem dodatkowym (poza wykresem). Wartość historyczna = ilość × cena zamknięcia dnia × kurs dnia (ceny skorygowane o splity); dni bez ceny są oznaczone jako oszacowane.</p>
     <p><b>TWR</b> łączy dzienne stopy zwrotu niezależnie od wpłat; <b>XIRR</b> to roczna stopa uwzględniająca moment i wielkość wpłat (Twój faktyczny wynik); <b>obsunięcie</b> to spadek indeksu TWR od szczytu.</p>
+    <p><b>Gotówka</b> (konta bankowe wpisane ręcznie, wolne środki XTB) jest doliczana tylko do bieżącej wartości portfela i tylko po włączeniu w zakładce „Gotówka”; zysk, wpłaty, wykresy i wskaźniki jej nie obejmują.</p>
   </div></details>
+  </div>
+
+  <div class="view" data-view="gotowka" hidden>
+    <section class="card">
+      <div class="card-h"><h2>Gotówka</h2><span class="hint">konta bankowe wpisujesz sam · wolne środki i lokaty biorą się z eksportów brokerów · wspólne dla wszystkich zakładek</span></div>
+      <div class="mgrid" id="cash-tiles"></div>
+      <div class="settings">
+        <label class="check"><input type="checkbox" data-set="include_cash"> <span><b>Uwzględniaj gotówkę z kont bankowych</b> w wartości portfela <span class="muted">(zakładka WSZYSTKIE)</span></span></label>
+        <label class="check"><input type="checkbox" data-set="include_xtb_free"> <span><b>Uwzględniaj wolne środki XTB</b> w wartości portfela <span class="muted">(zakładki XTB i WSZYSTKIE)</span></span></label>
+        <p class="note">Doliczana jest tylko <b>bieżąca wartość portfela</b> (kafelek „Wartość” i alokacja). Zysk, wpłaty, wykres i wskaźniki zostają bez zmian – gotówka nie jest inwestycją, a dopisanie jej do historii wyglądałoby jak zysk.</p>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-h"><h2>Konta bankowe</h2><span class="hint">saldo wpisujesz ręcznie (np. raz w miesiącu); bez numerów kont</span></div>
+      <div class="table-wrap"><table id="cash-acc"><thead><tr><th>Konto</th><th>Waluta</th><th class="n">Saldo</th><th>Na dzień</th><th class="n">Wartość w PLN</th><th></th></tr></thead><tbody></tbody></table></div>
+      <form id="cash-add" class="iform" autocomplete="off">
+        <label>Nazwa konta<input name="nazwa" maxlength="80" placeholder="np. mBank – konto osobiste" required></label>
+        <label>Waluta<select name="waluta"></select></label>
+        <label>Saldo<input name="saldo" inputmode="decimal" placeholder="0,00" required></label>
+        <label>Na dzień<input name="na_dzien" type="date"></label>
+        <button class="btn primary" type="submit">＋ Dodaj konto</button>
+      </form>
+    </section>
+    <section class="card">
+      <div class="card-h"><h2>Gotówka u brokerów</h2><span class="hint">z eksportów (saldo gotówki z księgi)</span></div>
+      <div class="table-wrap"><table id="cash-brk"><thead><tr><th>Konto</th><th>Rodzaj</th><th class="n">Saldo</th><th>Jak liczone</th></tr></thead><tbody></tbody></table></div>
+    </section>
+  </div>
+
+  <div class="view" data-view="ekspozycja" hidden>
+    <section class="card">
+      <div class="card-h"><h2>Ekspozycja portfela</h2><span class="hint" id="exp-note">podział wartości papierów (bez lokat i gotówki)</span></div>
+      <div class="exp-grid" id="exp-grid"></div>
+    </section>
+  </div>
+
+  <div class="view" data-view="symulacje" hidden>
+    <section class="card" id="sim"></section>
+  </div>
   {% endif %}
 </main>
 
@@ -218,8 +269,34 @@
     <p class="note">Dane zostają na tym komputerze: <code>{{ d.data_dir }}</code>. Do internetu wysyłane są tylko symbole instrumentów (po ceny).</p>
   </div>
 </aside>
+<div class="modal-bg" id="upd-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="upd-title">
+  <div class="modal">
+    <h2 id="upd-title">Dostępna nowa wersja</h2>
+    <p class="muted" id="upd-sub"></p>
+    <div class="upd-notes" id="upd-notes"></div>
+    <p class="note">Aktualizacja trwa około minuty: aplikacja zamknie się, zainstaluje nową wersję i uruchomi ponownie. Twoje dane zostają (przed zmianą bazy robi się kopia zapasowa).</p>
+    <div class="acts"><button class="btn primary" id="upd-go">Zaktualizuj teraz</button><button class="btn" id="upd-later">Nie teraz</button><a class="btn ghost" id="upd-page" href="#" target="_blank" rel="noopener">Strona wydania</a></div>
+    <p class="note" style="margin-top:8px">„Nie teraz”: zaktualizujesz później przyciskiem <b>⬆ Aktualizacja</b> u góry strony albo linkiem „Sprawdź aktualizacje” na dole.</p>
+  </div>
+</div>
+<div class="modal-bg" id="set-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="set-title">
+  <div class="modal">
+    <h2 id="set-title">Ustawienia</h2>
+    <h3 class="set-h">Ceny papierów</h3>
+    <label class="check"><input type="radio" name="price_source" value="YAHOO"> <span><b>Yahoo Finance – na żywo</b> (domyślnie). Ostatnia cena transakcyjna z giełdy, odświeżana co minutę.</span></label>
+    <label class="check"><input type="radio" name="price_source" value="XTB_EXPORT"> <span><b>XTB – z ostatniego eksportu.</b> Pozycje XTB mają dokładnie tę wartość, którą XTB pokazał w chwili eksportu (jego ceny i kursy walut) – zgodne z XTB, ale nie na żywo. Pozycja kupiona lub sprzedana po eksporcie wraca do Yahoo.</span></label>
+    <h3 class="set-h">Kursy walut</h3>
+    <label class="check"><input type="radio" name="fx_source" value="YAHOO"> <span><b>Rynkowy na żywo (Yahoo)</b> (domyślnie), bez marży brokera.</span></label>
+    <label class="check"><input type="radio" name="fx_source" value="NBP"> <span><b>Średni kurs NBP</b> (tabela A, raz dziennie).</span></label>
+    <p class="note">Dlaczego XTB pokazuje trochę inną wartość? XTB wycenia pozycje po swojej cenie sprzedaży (bid) i swoim kursie walut (z marżą), a Yahoo podaje ostatnią cenę transakcyjną i kurs rynkowy – zwykle to różnica rzędu 0,1–0,5%. XTB nie udostępnia publicznie cen na żywo, dlatego „ceny XTB” pochodzą z eksportu. Ustawienie zmienia tylko bieżącą wycenę (wartość, zysk niezrealizowany); historia na wykresie zawsze używa cen zamknięcia z Yahoo.</p>
+    <h3 class="set-h">Gotówka w wartości portfela</h3>
+    <label class="check"><input type="checkbox" data-set="include_cash"> <span>Uwzględniaj gotówkę z kont bankowych <span class="muted">(zakładka „Gotówka”)</span></span></label>
+    <label class="check"><input type="checkbox" data-set="include_xtb_free"> <span>Uwzględniaj wolne środki XTB</span></label>
+    <div class="acts"><button class="btn primary" id="set-close">Gotowe</button></div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
-<footer>{{ app_name }} {{ version }} · aplikacja lokalna (127.0.0.1) · ceny: Yahoo Finance, kursy: Yahoo / NBP · Trade Republic · WSZYSTKIE</footer>
+<footer>{{ app_name }} {{ version }} · <a href="#" id="upd-check">Sprawdź aktualizacje</a> · aplikacja lokalna (127.0.0.1) · ceny: Yahoo Finance, kursy: Yahoo / NBP</footer>
 <script src="/static/charts.js?v={{ static_v }}"></script>
 <script src="/static/app.js?v={{ static_v }}"></script>
 </body>

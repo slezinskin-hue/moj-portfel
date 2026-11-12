@@ -17,7 +17,10 @@ Definicje (opisane tez w interfejsie):
 * Zmiennosc roczna     - odchylenie standardowe dziennych stop zwrotu (dni robocze) x pierwiastek z 252.
 * Zwrot / ryzyko       - roczny TWR / zmiennosc roczna (BEZ stopy wolnej od ryzyka, wiec to nie jest klasyczny wskaznik Sharpe'a).
 * Stopa dywidendy      - dywidendy netto z ostatnich 12 miesiecy / biezaca wartosc papierow (oraz do kosztu otwartych pozycji).
+* Wykres "Zwrot %" (return_series): TWR, TWR z dywidendami, zysk / wplaty netto, zysk / suma wplat, XIRR od poczatku do dnia, roczny TWR (CAGR).
+  To tylko inne SPOSOBY pokazania tych samych liczb (wartosc, wplaty, dywidendy) - zadna kwota w aplikacji sie nie zmienia.
 """
+from collections import defaultdict
 from datetime import date, timedelta
 from math import sqrt
 
@@ -142,6 +145,66 @@ def profit_drawdown(gains_list):
     return worst
 
 
+def _xirr_newton(flows, guess=0.1):
+    """XIRR metoda Newtona (szybka, do serii w czasie); None, gdy nie zbiega - wtedy wolajacy uzywa bisekcji (xirr)."""
+    d0 = flows[0][0]
+    ts = [((d - d0).days / 365.0, a) for d, a in flows]
+    r = guess
+    for _ in range(50):
+        if r <= -0.9999:
+            return None
+        f = df = 0.0
+        for t, a in ts:
+            k = (1.0 + r) ** -t
+            f += a * k; df -= t * a * k / (1.0 + r)
+        if abs(df) < 1e-14:
+            return None
+        nr = r - f / df
+        if abs(nr - r) < 1e-10:
+            return nr if nr > -0.9999 else None
+        r = nr
+    return None
+
+
+def return_series(pts, income=None, step=7):
+    """Miary procentowe dzien po dniu (do wykresu "Zwrot %"), wyrownane z seria:
+    * twr_inc  - indeks TWR z dywidendami: r_t = (V_t + D_t) / (V_{t-1} + F_t) - 1 (dywidenda netto dnia D_t jak zwrot);
+    * gain_net - zysk / wplaty netto (prosta stopa zwrotu), gain_gross - zysk / suma wplat (jak kafelek "Zysk od wplat");
+    * xirr     - XIRR od poczatku do dnia (co `step` dni i ostatni dzien; od XIRR_MIN_DAYS), cagr - roczny TWR (od CAGR_MIN_DAYS)."""
+    inc = defaultdict(float)
+    for d, a in (income or []):
+        inc[d] += a
+    first = pts[0][0]
+    out = {"twr_inc": [1.0], "gain_net": [], "gain_gross": [], "xirr": [], "cagr": []}
+    idx = idx_inc = 1.0
+    flows, guess = [], 0.1
+    for i, (d, v, f, gross) in enumerate(pts):
+        if i:
+            base = pts[i - 1][1] + f
+            if base > 1e-9:
+                idx *= v / base; idx_inc *= (v + inc.get(d, 0.0)) / base
+            out["twr_inc"].append(idx_inc)
+        if abs(f) > 1e-9:
+            flows.append((d, -f))
+        net = sum(-a for _, a in flows)
+        g = v - net
+        out["gain_net"].append(g / net if net > 1e-9 else None)
+        out["gain_gross"].append(g / gross if gross > 1e-9 else None)
+        days = (d - first).days
+        out["cagr"].append(annualize(idx - 1.0, days))
+        x = None
+        if days >= XIRR_MIN_DAYS and (i == len(pts) - 1 or days % step == 0):
+            fl = flows + [(d, v)]
+            if any(a < 0 for _, a in fl) and any(a > 0 for _, a in fl):
+                x = _xirr_newton(fl, guess)
+                if x is None or i == len(pts) - 1:
+                    x = xirr(fl)
+                if x is not None:
+                    guess = x
+        out["xirr"].append(x)
+    return out
+
+
 def volatility(returns, min_obs=30):
     xs = [r for d, r in returns if d.weekday() < 5]
     if len(xs) < min_obs:
@@ -210,6 +273,6 @@ def compute(series, income=None, cost_left=None):
         "income_12m": inc12, "dividend_yield": (inc12 / v_end) if v_end > 1e-9 else None,
         "yield_on_cost": (inc12 / cost_left) if cost_left and cost_left > 1e-9 else None,
         "estimated_days": sum(1 for p in series if p.get("estimated_positions")),
-        "index_series": index_series,
+        "index_series": index_series, "return_series": return_series(pts, inc),
         "day_change": day_change, "day_change_pct": rets[-1][1] if rets else None, "day_change_from": d_prev.isoformat(),
     }

@@ -85,6 +85,36 @@ class YahooProvider:
         return [{"symbol": i["symbol"], "exchange": i.get("exchDisp") or i.get("exchange"), "name": i.get("longname") or i.get("shortname"), "type": i.get("quoteType")}
                 for i in items if i.get("symbol") and i.get("quoteType") in ("EQUITY", "ETF")]
 
+    def search_profile(self, provider_symbol):
+        """Profil notowania z wyszukiwarki Yahoo (tylko dokladnie ten symbol): {type, sector, industry, exchange, name} albo None."""
+        from urllib.parse import quote as urlquote
+        body = self.fetch(f"https://query2.finance.yahoo.com/v1/finance/search?q={urlquote(provider_symbol)}&quotesCount=5&newsCount=0")
+        try:
+            items = json.loads(body)["quotes"]
+        except Exception as e:  # noqa: BLE001
+            raise ProviderError(f"Nieczytelna odpowiedz wyszukiwania Yahoo dla {provider_symbol}") from e
+        q = next((i for i in items if i.get("symbol") == provider_symbol), None)
+        if q is None:
+            return None
+        return {"type": q.get("quoteType"), "sector": q.get("sector") or None, "industry": q.get("industry") or None,
+                "exchange": q.get("exchDisp") or q.get("exchange"), "name": q.get("longname") or q.get("shortname")}
+
+    def splits(self, provider_symbol, start_ts=946684800):
+        """Podzialy akcji wg Yahoo (zdarzenia z endpointu wykresow): [(data, licznik, mianownik)] - np. 10:1 = (data, 10, 1)."""
+        import time as _t
+        body = self.fetch(f"https://query1.finance.yahoo.com/v8/finance/chart/{provider_symbol}?interval=1d&period1={int(start_ts)}&period2={int(_t.time()) + 86400}&events=split")
+        try:
+            res = json.loads(body)["chart"]["result"][0]
+        except Exception as e:  # noqa: BLE001
+            raise ProviderError(f"Nieczytelna odpowiedz Yahoo dla {provider_symbol}") from e
+        out = []
+        for ev in ((res.get("events") or {}).get("splits") or {}).values():
+            try:
+                out.append((datetime.fromtimestamp(int(ev["date"]), timezone.utc).date(), Decimal(str(ev["numerator"])), Decimal(str(ev["denominator"]))))
+            except (KeyError, ValueError, TypeError):
+                continue
+        return sorted(out)
+
     def fx(self, base, quote="PLN"):
         q = self.quote(f"{base}{quote}=X")
         return {"base": base, "quote": quote, "rate": q["price"], "quoted_at": q["quoted_at"]}

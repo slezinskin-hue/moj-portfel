@@ -16,10 +16,14 @@
    zapasowa bazy; plik można wczytać ponownie.
 4. Zamknięcie: zamknij okno (albo przycisk **⏻**) – zatrzymuje serwer i bazę. Ponowne kliknięcie skrótu, gdy aplikacja działa, przenosi jej okno
    na wierzch (bez drugiej kopii).
-5. **Aktualizacje**: aplikacja sprawdza najnowsze wydanie na GitHubie (co kilka godzin) i pokazuje pasek „Dostępna nowa wersja”. Przycisk
-   **Zainstaluj aktualizację** pobiera instalator (tylko z wydania tego repozytorium, sprawdza sumę SHA-256), zamyka aplikację, instaluje nową
-   wersję i ją uruchamia. Dane zostają; przed zmianą schematu bazy robi się kopia zapasowa (`kopie\`).
-6. Odinstalowanie: Ustawienia Windows → Aplikacje → Mój Portfel. Dane w `%LOCALAPPDATA%\AplikacjaInwestycyjna` nie są usuwane – możesz je usunąć ręcznie.
+5. **Aktualizacje**: aplikacja sprawdza najnowsze wydanie na GitHubie (przy uruchomieniu i co kilka godzin) i pyta „Dostępna nowa wersja –
+   zaktualizować teraz?”. **Zaktualizuj teraz** pobiera instalator (tylko z wydania tego repozytorium, sprawdza sumę SHA-256), zamyka aplikację,
+   instaluje nową wersję i ją uruchamia. **Nie teraz** zamyka pytanie; aktualizację można zrobić później przyciskiem **⬆ Aktualizacja**
+   w nagłówku albo linkiem „Sprawdź aktualizacje” na dole strony (przy następnym uruchomieniu aplikacja zapyta ponownie).
+   Dane zostają; przed zmianą schematu bazy robi się kopia zapasowa (`kopie\`). (Wersja 0.2.x pokazuje jeszcze pasek z przyciskiem
+   „Zainstaluj aktualizację” – działa tak samo.)
+6. Odinstalowanie: Ustawienia Windows → Aplikacje → Mój Portfel. Na końcu deinstalator pyta, czy usunąć też dane z
+   `%LOCALAPPDATA%\AplikacjaInwestycyjna` (baza, kopie zapasowe, ustawienia) – wybierz „Tak” np. przed oddaniem komputera; domyślnie dane zostają.
 
 ## Jak powstaje instalator
 

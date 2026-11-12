@@ -68,7 +68,7 @@ Filename: "{app}\python\pythonw.exe"; Parameters: "-m invapp"; WorkingDir: "{app
 Filename: "{app}\python\python.exe"; Parameters: "-m invapp --stop"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "ZatrzymajAplikacje"
 
 [Messages]
-polish.FinishedLabel=Instalacja zakończona. Aplikacja otwiera się we własnym oknie (działa tylko na tym komputerze). Twoje dane są w %LOCALAPPDATA%\AplikacjaInwestycyjna i nie są usuwane przy aktualizacji ani deinstalacji.
+polish.FinishedLabel=Instalacja zakończona. Aplikacja otwiera się we własnym oknie (działa tylko na tym komputerze). Twoje dane są w %LOCALAPPDATA%\AplikacjaInwestycyjna – aktualizacja ich nie zmienia, a przy odinstalowaniu zapytam, czy je usunąć.
 
 [Code]
 // Przed instalacja na starej wersji: czyste zatrzymanie dzialajacej aplikacji (serwer WWW i baza) - pliki nie sa wtedy zablokowane.
@@ -81,4 +81,21 @@ begin
   Py := ExpandConstant('{app}\python\python.exe');
   if FileExists(Py) then
     Exec(Py, '-m invapp --stop', ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, Rc);
+end;
+
+// Deinstalacja (np. przed oddaniem komputera): pytanie, czy usunac tez dane portfela. Domyslnie NIE (tryb cichy: nigdy nie usuwa danych).
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Data: String;
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    Data := ExpandConstant('{localappdata}\AplikacjaInwestycyjna');
+    if (not UninstallSilent) and DirExists(Data) then
+      if MsgBox('Usunąć także Twoje dane z tego komputera?' + #13#10 + #13#10 +
+                'Baza portfela, wczytane eksporty, kopie zapasowe i ustawienia w:' + #13#10 + Data + #13#10 + #13#10 +
+                'Wybierz „Tak”, jeśli oddajesz lub sprzedajesz komputer. Tego nie da się cofnąć.',
+                mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+        DelTree(Data, True, True, True);
+  end;
 end;

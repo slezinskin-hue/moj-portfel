@@ -152,13 +152,23 @@ def refresh_history(conn, provider, start=date(2024, 1, 1), pause=0.3):
         if h["closes"]:
             execute_values(cur, """insert into prices(listing_id,price_date,close_price,currency,source) values %s
                                    on conflict (listing_id, price_date, source) do update set close_price = excluded.close_price, currency = excluded.currency, fetched_at = now()""",
-                           [(listing_id, d, c, ccy, SOURCE) for d, c in h["closes"]], page_size=1000)
+                           [(listing_id, d, c, ccy, SOURCE) for d, c in sorted(dict(h["closes"]).items())], page_size=1000)   # dzien raz (ostatni)
         res["price_rows"] += len(h["closes"])
         res["listings"] += 1
-    fx_list = sorted(currencies - {"PLN"})
-    cur.execute("select base, max(rate_date) from fx_rates where source = %s and quote = 'PLN' group by base", (SOURCE,))
-    fx_last = dict(cur.fetchall())
-    fx_since = {c: max(start, fx_last[c] - timedelta(days=OVERLAP_DAYS)) if fx_last.get(c) else start for c in fx_list}
+    fx = refresh_fx(conn, provider, currencies, start)
+    res["fx"], res["errors"] = fx["fx"], res["errors"] + fx["errors"]
+    return res
+
+
+def refresh_fx(conn, provider, currencies, start=date(2024, 1, 1)):
+    """Kursy dzienne {waluta}/PLN (YAHOO_1D) dla podanych walut; przyrostowo od (ostatni dzien - OVERLAP_DAYS), ale nie pozniej niz `start`
+    (gdy potrzebna jest wczesniejsza historia, niz juz zapisana - np. dla indeksow porownawczych)."""
+    from psycopg2.extras import execute_values
+    cur = conn.cursor(); res = {"fx": {}, "errors": []}
+    fx_list = sorted(set(currencies) - {"PLN"})
+    cur.execute("select base, min(rate_date), max(rate_date) from fx_rates where source = %s and quote = 'PLN' group by base", (SOURCE,))
+    known = {b: (lo, hi) for b, lo, hi in cur.fetchall()}
+    fx_since = {c: max(start, known[c][1] - timedelta(days=OVERLAP_DAYS)) if c in known and known[c][0] <= start + timedelta(days=5) else start for c in fx_list}
     fx_fetched = fetch_all(lambda c: provider.daily(f"{c}PLN=X", fx_since[c]), fx_list)
     for ccy in fx_list:
         h, err = fx_fetched[ccy]
@@ -167,7 +177,7 @@ def refresh_history(conn, provider, start=date(2024, 1, 1), pause=0.3):
         if h["closes"]:
             execute_values(cur, """insert into fx_rates(rate_date,base,quote,rate,source) values %s
                                    on conflict (rate_date, base, quote, source) do update set rate = excluded.rate""",
-                           [(d, ccy, "PLN", c, SOURCE) for d, c in h["closes"]], page_size=1000)
+                           [(d, ccy, "PLN", c, SOURCE) for d, c in sorted(dict(h["closes"]).items())], page_size=1000)   # dzien raz (ostatni)
         res["fx"][ccy] = len(h["closes"])
     return res
 

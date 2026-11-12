@@ -28,6 +28,9 @@ jobs:
         run: |
           .\instalator\build.ps1 -HostPython python
           Get-Content dist\build.env | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+      - name: Test instalacji na czystym Windowsie (przed publikacja)
+        shell: powershell
+        run: .\instalator\test_instalacji.ps1 -Installer "dist\$env:INSTALLER_NAME" -Version $env:APP_VERSION
       - name: Wydanie na GitHubie
         shell: bash
         env:

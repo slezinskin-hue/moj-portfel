@@ -56,13 +56,18 @@ def check_dependencies():
 
 
 def our_app_running(port):
-    """Czy na porcie dziala NASZA aplikacja (a nie cos innego)? Zwraca wersje albo None."""
+    """Czy na porcie dziala NASZA aplikacja (a nie cos innego) na TYCH SAMYCH danych? Zwraca wersje albo None.
+    Aplikacja na innym katalogu danych (np. zainstalowana, gdy uruchamiamy wersje z innym --data-dir) nie jest "nasza"."""
     try:
         with urllib.request.urlopen(f"http://{config.HOST}:{port}/zdrowie", timeout=2) as r:
             body = json.loads(r.read().decode("utf-8"))
-            return body.get("wersja") if body.get("aplikacja") == APP_NAME else None
     except Exception:  # noqa: BLE001
         return None
+    if body.get("aplikacja") != APP_NAME:
+        return None
+    if body.get("dane_id") is not None and body.get("dane_id") != config.data_id():      # wersje sprzed 0.3.0 nie podaja dane_id
+        return None
+    return body.get("wersja")
 
 
 def port_free(port):
@@ -225,6 +230,7 @@ def run_window(app, server, url, port):
                                        maximized=True,                       # domyslnie na caly ekran (z paskiem tytulu i przyciskiem zamkniecia)
                                        background_color="#0b1120" if windows_dark_mode() else "#f4f6fa")
         app.state.window = window
+        webview.settings["ALLOW_DOWNLOADS"] = True              # eksport do Excela: okno "Zapisz jako" (plik zapisuje sie tylko tam, gdzie wskaze uzytkownik)
         storage = config.data_dir() / "okno"
         storage.mkdir(parents=True, exist_ok=True)
         webview.start(private_mode=False, storage_path=str(storage), icon=ICON if os.path.exists(ICON) else None)

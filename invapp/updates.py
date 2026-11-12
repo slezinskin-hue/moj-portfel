@@ -15,6 +15,7 @@ from invapp import __version__, config
 
 API = "https://api.github.com"
 CHECK_TTL = 6 * 3600
+FORCE_MIN_INTERVAL = 30
 _cache = {"at": 0.0, "data": None, "release": None}
 _lock = threading.Lock()
 
@@ -61,7 +62,8 @@ def check(force=False, fetch=_get_json):
         out["powod"] = "Sprawdzanie aktualizacji jest wyłączone w wersji uruchamianej ze źródeł."
         return out
     with _lock:
-        if not force and _cache["data"] is not None and time.time() - _cache["at"] < CHECK_TTL:
+        age = time.time() - _cache["at"]
+        if _cache["data"] is not None and (age < FORCE_MIN_INTERVAL or (not force and age < CHECK_TTL)):   # "Sprawdz teraz" nie czesciej niz co 30 s
             return {**out, **_cache["data"]}
     try:
         rel = latest_release(info, fetch)

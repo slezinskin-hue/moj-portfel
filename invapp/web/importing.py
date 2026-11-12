@@ -192,7 +192,7 @@ def _pricing_pass():
     """Jeden przebieg, w kolejnosci od tego, co uzytkownik chce zobaczyc najszybciej:
     szybkie kroki brokerow (powiazania symboli) -> notowania na zywo -> wolne kroki (specyfikacje) -> notowania dla nowych -> historia -> NBP.
     Blad kroku nie przerywa pozostalych."""
-    from invapp.pricing import history, service
+    from invapp.pricing import benchmarks, history, profiles, service
     from invapp.pricing.providers import NbpProvider, YahooProvider
     conn = owner_conn()
     try:
@@ -204,6 +204,8 @@ def _pricing_pass():
             steps += [(t, f, False) for t, f in ph["slow"]] + [("Notowania dla uzupełnionych instrumentów", quotes[1], True)]
         steps += [(t, f, False) for t, f in ph["history"]]
         steps += [("Ceny historyczne i kursy dzienne", lambda: history.refresh_history(conn, history.HistoryYahoo()), True),
+                  ("Indeksy do porównania", lambda: benchmarks.refresh(conn, history.HistoryYahoo()), True),
+                  ("Profile instrumentów (sektory)", lambda: profiles.refresh(conn, YahooProvider()), True),
                   ("Kursy NBP", lambda: service.refresh_nbp(conn, NbpProvider()), True)]
         _set(steps=len(steps))
         for i, (title, fn, bumps) in enumerate(steps, 1):

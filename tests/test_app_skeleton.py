@@ -12,7 +12,33 @@ from invapp.web.app import app  # noqa: E402
 
 class TestSkeleton(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(app)
+        self.client = TestClient(app, base_url="http://127.0.0.1")
+
+    def test_only_local_host_and_no_foreign_origin(self):
+        # obca domena wskazujaca na 127.0.0.1 (DNS rebinding) nie dostaje danych
+        for host in ("evil.example", "evil.example:8000", "127.0.0.1.evil.example", "192.168.1.5"):
+            r = TestClient(app, base_url=f"http://{host}").get("/api/zywo")
+            self.assertEqual(r.status_code, 400, host)
+        for path in ("/zdrowie", "/api/zywo", "/api/gotowka", "/api/eksport.xlsx", "/podglad"):
+            self.assertEqual(self.client.get(path, headers={"Origin": "https://evil.example"}).status_code, 403, path)     # odczyt z obcej strony
+        self.assertEqual(self.client.post("/api/ustawienia", headers={"Origin": "https://evil.example", "X-Requested-With": "invapp"}, json={}).status_code, 403)
+        self.assertEqual(self.client.get("/zdrowie", headers={"Origin": "http://127.0.0.1:8000"}).status_code, 200)        # wlasna strona
+        self.assertEqual(TestClient(app, base_url="http://localhost:8000").get("/zdrowie").status_code, 200)
+
+    def test_security_headers(self):
+        r = self.client.get("/zdrowie")
+        self.assertEqual(r.headers["X-Frame-Options"], "DENY")
+        self.assertEqual(r.headers["Referrer-Policy"], "no-referrer")
+        self.assertIn("script-src 'self'", r.headers["Content-Security-Policy"]); self.assertIn("frame-ancestors 'none'", r.headers["Content-Security-Policy"])
+        self.assertNotIn("unsafe-eval", r.headers["Content-Security-Policy"])
+        def read(*p):
+            with open(os.path.join(ROOT, *p), encoding="utf-8") as f:
+                return f.read()
+        js = read("invapp", "web", "static", "app.js") + read("invapp", "web", "static", "charts.js")
+        html = read("invapp", "web", "templates", "dashboard.html")
+        self.assertNotRegex(js + html, r'\son(click|submit|change|input|load)=')                       # bez skryptow w atrybutach (CSP)
+        self.assertNotRegex(html, r'<script(?![^>]*(src="/static/|type="application/json"))')        # tylko wlasne pliki skryptow
+        self.assertNotRegex(js + html, r'https?://(?!github\.com|127\.0\.0\.1|www\.w3\.org/2000/svg)[a-z]')   # strona nie laduje niczego z internetu (w3.org = przestrzen nazw SVG)
 
     def test_root_redirects_to_portfolio_page(self):
         r = self.client.get("/", follow_redirects=False)
