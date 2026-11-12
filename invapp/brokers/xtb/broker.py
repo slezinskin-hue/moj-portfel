@@ -192,6 +192,10 @@ class Xtb(Broker):
     def pricing_steps(self, conn, provider):
         """Kroki szybkie (przed pierwszym pobraniem notowan - uzytkownik szybko widzi wartosci) i wolne (specyfikacja PDF, historia)."""
         from invapp.pricing import history, service
+        cur = conn.cursor()
+        cur.execute("select exists (select 1 from import_batches b join financial_institutions f using (broker_id) where f.code = 'XTB')")
+        if not cur.fetchone()[0]:
+            return []                                          # brak plikow XTB - nie pobieramy specyfikacji XTB (PDF ~35 s) na darmo
         verify = lambda: [r["status"] for r in service.verify_mappings(conn, provider, broker_code="XTB")]  # noqa: E731
         return [
             ("Symbole XTB u dostawcy cen (weryfikacja)", verify, "quick"),

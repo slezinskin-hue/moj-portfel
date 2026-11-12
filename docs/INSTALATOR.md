@@ -10,6 +10,9 @@
 3. Aplikacja otwiera się w przeglądarce (adres `http://127.0.0.1:…`, tylko ten komputer). Wczytaj eksporty z XTB (.xlsx) albo Trade Republic (.csv).
    Dane zostają w `%LOCALAPPDATA%\AplikacjaInwestycyjna`. Kolejne eksporty możesz wczytywać w każdej chwili – duplikaty są pomijane, dochodzą
    tylko nowe operacje.
+   **Usunięcie pliku**: „＋ Wczytaj pliki” → lista „Wczytane pliki” → **Usuń**. Z portfela znika to, co pochodzi tylko z tego pliku (operacje
+   obecne też w innym wczytanym pliku zostają, konto bez danych znika) – stan jak gdyby pliku nie wczytano. Przed usunięciem robi się kopia
+   zapasowa bazy; plik można wczytać ponownie.
 4. Zamknięcie: przycisk **⏻** na stronie (zatrzymuje serwer i bazę). Ponowne otwarcie: skrót „Mój Portfel”.
 5. **Aktualizacje**: aplikacja sprawdza najnowsze wydanie na GitHubie (co kilka godzin) i pokazuje pasek „Dostępna nowa wersja”. Przycisk
    **Zainstaluj aktualizację** pobiera instalator (tylko z wydania tego repozytorium, sprawdza sumę SHA-256), zamyka aplikację, instaluje nową

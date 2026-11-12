@@ -40,7 +40,7 @@ def unsupported_message():
 
 def safe_name(name):
     name = os.path.basename((name or "").replace("\\", "/"))
-    return name if re.match(r"^[A-Za-z0-9._\- ]{1,120}$", name) else None
+    return name if re.fullmatch(r"[\w.\- ()]{1,120}", name) and not name.startswith(".") else None     # litery (takze polskie), cyfry, . _ - spacja i nawiasy ("(2)" od przegladarki)
 
 
 _import_lock = threading.Lock()
@@ -81,6 +81,24 @@ def _run_import_bytes(data, filename):
             os.remove(path); os.rmdir(tmpdir)
         except OSError:
             pass
+
+
+def remove_import(batch_id, make_backup=True):
+    """Usuniecie wczytanego pliku (core/removal.py): po kolei z importami, z kopia zapasowa bazy przed zmiana."""
+    from invapp.core import removal
+    with _import_lock:
+        if make_backup:
+            from invapp.db import backup
+            backup.create(label="przed-usunieciem-pliku")
+        conn = owner_conn()
+        try:
+            res = removal.remove_batch(conn, batch_id)
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+        finally:
+            conn.close()
+        return res
 
 
 # ---------------------------------------------------------------- pytania brokerow (np. waluta instrumentow .PL)

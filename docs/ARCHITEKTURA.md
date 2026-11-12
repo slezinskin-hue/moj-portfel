@@ -15,6 +15,7 @@ invapp/
     common.py               konwersje liczb, skróty wierszy, maskowanie danych osobowych
     derive.py               warstwa pochodna: partie i zamknięcia (XTB wg Position ID, FIFO dla brokerów bez numerów pozycji)
     deposits.py             gotówka oprocentowana jako lokata (model odsetek, stopa z wypłat, kontrola)
+    removal.py              usunięcie wczytanego pliku (stan jak bez tego pliku)
   brokers/
     base.py                 WSPÓLNY INTERFEJS brokera (rozpoznanie pliku, walidacja, import, partie, kroki cenowe, pytania do użytkownika)
     __init__.py             LISTA BROKERÓW (BROKERS) – jedyne miejsce, które trzeba dopisać przy nowym brokerze
@@ -40,6 +41,10 @@ tests/                      testy publiczne (dane syntetyczne; wbudowany Postgre
   Koszt = gotówka z księgi (z opłatami), nie koszt podatkowy.
 * Import atomowy i idempotentny: ponowny import tego samego albo nowszego eksportu dodaje tylko nowe operacje (klucze deduplikacji
   z identyfikatorów brokera), kolejność plików bez znaczenia; nieznane typy operacji nie trafiają do księgi (UNMAPPED).
+* Usunięcie wczytanego pliku (`core/removal.py`) = stan jak gdyby pliku nigdy nie wczytano: usuwane jest tylko to, co pochodzi wyłącznie
+  z tego pliku, powiązania liczone z całej księgi (przelewy, podatek → dywidenda, splity wykryte z danych) są liczone od nowa, konto bez
+  danych znika, decyzje użytkownika zostają. Lokalny test sprawdza to dla każdego prawdziwego pliku.
+* Czysta instalacja nie zawiera żadnych danych: instalator ma tylko program, baza powstaje pusta przy pierwszym uruchomieniu.
 * Waluta i giełda instrumentu nie wynikają z sufiksu symbolu: tylko specyfikacja brokera, jawna decyzja użytkownika (pytanie w interfejsie)
   albo źródło zewnętrzne ze sprawdzeniem ceny – zawsze ze źródłem, datą i statusem.
 * Dane osobowe (IBAN, imię i nazwisko z opisów przelewów) nie są zapisywane – tylko skrót i maska.

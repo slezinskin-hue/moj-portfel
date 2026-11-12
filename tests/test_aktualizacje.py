@@ -93,6 +93,7 @@ class TestShutdownApi(unittest.TestCase):
         finally:
             del app.state.server
         self.assertEqual(c.post("/api/aktualizacja/instaluj").status_code, 403)
+        self.assertEqual(c.post("/api/import/1/usun").status_code, 403)                          # usuwanie pliku tez tylko z naglowkiem ochronnym
         self.assertEqual(c.get("/api/aktualizacja").status_code, 200)
 
 

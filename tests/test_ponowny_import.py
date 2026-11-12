@@ -100,6 +100,62 @@ class TestRepeatedImports(tm.Base):
         self.assertEqual(s["gain"], s["value"] - D("400.00"))            # premia jest w wartosci i w zysku
         self.assertEqual(s["deposits"], D("400.00"))                     # gotowka: 400 + 150 - 150
 
+    def test_estimated_price_without_history_uses_last_trade_of_the_day(self):
+        """Brak historii cen instrumentu: wykres szacuje cene z ostatniej transakcji DNIA (nie z najwyzszej ceny jednostkowej tego dnia)."""
+        from datetime import date
+        from invapp.pricing import history
+        rows = [row(21, "2026-03-02T08:00:00.000Z", "CASH", "CUSTOMER_INPAYMENT", "200.00"),
+                trade(22, "2026-03-02T08:30:00.000Z", "BUY", "PL0000000003", "0.001", "100.00", "-0.10", fee="-4.00"),   # koszt 4,10 zl za 0,001 szt.
+                trade(23, "2026-03-02T14:00:00.000Z", "BUY", "PL0000000003", "1", "100.00", "-100.00", fee="-1.00")]    # 101 zl za 1 szt.
+        self.imp(self.csv("szac.csv", rows))
+        s = history.build_series(tm._conn, "BROKER:TR", end=date(2026, 3, 5))["series"][-1]
+        self.assertEqual(s["estimated_positions"], 1)
+        self.assertEqual(s["securities"], (D("1.001") * D("101")).quantize(D("0.01")))     # 1,001 szt. x 101 zl (ostatni zakup), nie x 4100 zl
+
+    def batches(self):
+        return [r["batch_id"] for r in self.rows("select batch_id from import_batches order by batch_id")]
+
+    def test_remove_newer_export_returns_to_older_state(self):
+        from invapp.core import removal
+        self.imp(self.csv("styczen.csv", JAN)); only_jan = self.ledger()
+        self.imp(self.csv("luty.csv", JAN + FEB))
+        res = removal.remove_batch(tm._conn, self.batches()[-1])
+        self.assertEqual(res["usuniete_operacje"], 2); self.assertEqual(res["usuniete_konta"], [])
+        self.assertEqual(self.ledger(), only_jan)                                   # jak gdyby nowszego pliku nie wczytano
+        self.assertEqual(self.one("select sum(qty_remaining) from derived_lots"), D("10"))
+        self.assertEqual(self.one("select count(*) from raw_rows"), 4)              # surowe wiersze tylko pozostalego pliku
+        c = self.imp(self.csv("luty.csv", JAN + FEB))                              # mozna wczytac ponownie
+        self.assertEqual((c["INSERTED"], c["DUPLICATE"]), (2, 4))
+
+    def test_remove_older_export_keeps_operations_present_in_newer(self):
+        from invapp.core import removal
+        self.imp(self.csv("styczen.csv", JAN)); self.imp(self.csv("luty.csv", JAN + FEB)); both = self.ledger()
+        first, second = self.batches()
+        res = removal.remove_batch(tm._conn, first)
+        self.assertEqual(res["usuniete_operacje"], 0); self.assertEqual(res["zachowane_wspolne"], 4)
+        self.assertEqual(self.ledger(), both)
+        self.assertEqual(self.one("select count(*) from transactions where first_batch_id <> %s or last_seen_batch_id <> %s", (second, second)), 0)
+
+    def test_remove_only_file_removes_account_and_its_decisions(self):
+        from invapp.core import removal
+        self.imp(self.csv("styczen.csv", JAN))
+        acc = self.one("select account_id from accounts")
+        self.cur.execute("""insert into cash_deposit_terms(account_id,treat_as_deposit,annual_rate,tax_rate,day_count,capitalization,rate_source,decided_by)
+                            values (%s,true,0.06,0.19,365,'MONTHLY','test','test')""", (acc,))
+        res = removal.remove_batch(tm._conn, self.batches()[0])
+        self.assertEqual(res["usuniete_konta"], ["Trade Republic"])
+        for t in ("accounts", "transactions", "import_batches", "raw_rows", "derived_lots", "cash_deposit_terms", "flow_classification"):
+            self.assertEqual(self.one(f"select count(*) from {t}"), 0, t)
+        self.assertEqual(self.one("select count(*) from listings"), 1)              # instrument (bez danych konta) moze zostac - nie wplywa na wyniki
+        with self.assertRaises(Exception):
+            removal.remove_batch(tm._conn, 999999)
+        self.cur.execute("update transactions set notes = 'x' where false")        # ochrona ksiegi znowu wlaczona:
+        self.imp(self.csv("styczen.csv", JAN))
+        self.cur.execute("savepoint s")
+        with self.assertRaises(Exception):
+            self.cur.execute("update transactions set occurred_at = occurred_at + interval '1 second'")      # rdzen ksiegi znowu chroniony wyzwalaczem
+        self.cur.execute("rollback to savepoint s")
+
     def test_older_export_after_newer_adds_nothing(self):
         self.imp(self.csv("nowy.csv", JAN + FEB))
         ref = self.ledger()

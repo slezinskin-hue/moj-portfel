@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testy czesci, ktore powstaly przy przenosinach do wersji instalowalnej:
 * wbudowana baza (pierwsze uruchomienie: role i losowe hasla, scram zamiast trust, migracje; restart na tych samych danych; kopia zapasowa),
 * lista brokerow (rozpoznawanie plikow, rejestracja nowego brokera),
@@ -91,6 +91,12 @@ class TestBrokerRegistry(tm.Base):
         csv_head = open(os.path.join(ROOT, "export", "Eksport transakcji.csv"), "rb").read(2048) if os.path.exists(os.path.join(ROOT, "export", "Eksport transakcji.csv")) else None
         self.assertEqual(brokers.for_upload("IKE_12345678_2006-01-01_2026-11-11.xlsx", b"PK\x03\x04").code, "XTB")
         self.assertIsNone(brokers.for_upload("raport.xlsx", b"PK\x03\x04"))                          # nazwa nie z XTB
+        self.assertEqual(brokers.for_upload("IKE_12345678_2006-01-01_2026-11-11 (1).xlsx", b"PK\x03\x04").code, "XTB")       # ponowne pobranie w Windows
+        for ok in ("Eksport transakcji (2).csv", "Eksport_ąęść.csv", "IKE_12345678_2006-01-01_2026-11-11 (1).xlsx"):
+            self.assertEqual(importing.safe_name(ok), ok)
+        for bad in (".env", "a;b.csv", "x" * 200 + ".csv"):
+            self.assertIsNone(importing.safe_name(bad))
+        self.assertEqual(importing.safe_name("..\\..\\Windows\\x.csv"), "x.csv")                   # tylko sama nazwa, bez sciezki
         if csv_head:
             self.assertEqual(brokers.for_upload("Eksport transakcji.csv", csv_head).code, "TR")
         self.assertIsNone(brokers.for_upload("inne.csv", b'"a","b"\n'))

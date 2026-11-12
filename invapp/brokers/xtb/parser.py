@@ -13,7 +13,7 @@ from invapp.core.common import ImportFailed, as_utc, blank, canon, clean, dec, i
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-FILE_RE = re.compile(r"^(?P<label>[A-Z]+)_(?P<acct>\d+)_(?P<from>\d{4}-\d{2}-\d{2})_(?P<to>\d{4}-\d{2}-\d{2})\.xlsx$")
+FILE_RE = re.compile(r"^(?P<label>[A-Z]+)_(?P<acct>\d+)_(?P<from>\d{4}-\d{2}-\d{2})_(?P<to>\d{4}-\d{2}-\d{2})(?: \(\d+\))?\.xlsx$")   # " (2)" - kolejne pobranie tego samego pliku w Windows
 PARSER_NAME, PARSER_VERSION = "xtb_xlsx", "1.0"
 
 # --- wzorce komentarzy (dokument 2 §2.3)

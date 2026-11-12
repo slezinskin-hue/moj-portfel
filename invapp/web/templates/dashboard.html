@@ -208,6 +208,13 @@
     <ul class="helps">{% for b in d.brokers %}<li>{{ b.help|safe }}</li>{% endfor %}</ul>
     <div id="bg-progress" style="display:none"><div class="progress"><i></i></div><div class="note" id="bg-step" style="margin:0"></div></div>
     <div id="import-results"></div>
+    {% if d.all_batches %}
+    <h3 style="font-size:.95rem;margin:22px 0 6px">Wczytane pliki</h3>
+    <div class="files">{% for b in d.all_batches %}<div class="frow"><div style="min-width:0"><b class="fname">{{ b.source_file_name }}</b>
+      <div class="muted" style="font-size:.8rem">{{ b.broker }} · {{ b.started_at.strftime('%Y-%m-%d %H:%M') if b.started_at else '' }} · nowych operacji {{ b.rows_inserted }}, już wczytanych {{ b.rows_duplicate }}</div></div>
+      <button class="btn ghost del-batch" type="button" data-id="{{ b.batch_id }}" data-name="{{ b.source_file_name }}" title="Usuń ten plik z portfela">Usuń</button></div>{% endfor %}</div>
+    <p class="note">Usunięcie pliku: znika z portfela to, co pochodzi <b>tylko</b> z tego pliku (operacje obecne też w innym wczytanym pliku zostają), konto bez danych też. Przed usunięciem robi się kopia zapasowa bazy. Plik możesz później wczytać ponownie.</p>
+    {% endif %}
     <p class="note">Dane zostają na tym komputerze: <code>{{ d.data_dir }}</code>. Do internetu wysyłane są tylko symbole instrumentów (po ceny).</p>
   </div>
 </aside>

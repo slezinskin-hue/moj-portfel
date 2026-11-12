@@ -318,6 +318,18 @@
     if (ok) { const n = document.createElement('div'); n.className = 'note'; n.innerHTML = '<b>Gotowe.</b> Odświeżam widok; ceny i historia dociągają się w tle (pasek u góry).'; out.appendChild(n); setTimeout(() => location.reload(), 1500); }
   }
 
+  // usuniecie wczytanego pliku (stan jak bez tego pliku; kopia zapasowa przed zmiana)
+  $$('.del-batch').forEach(b => b.onclick = async () => {
+    if (!confirm(`Usunąć plik „${b.dataset.name}” z portfela?\n\nZniknie to, co pochodzi tylko z tego pliku (operacje obecne też w innym wczytanym pliku zostaną). Przed usunięciem zrobię kopię zapasową bazy. Plik możesz później wczytać ponownie.`)) return;
+    b.disabled = true; b.textContent = 'Usuwam…';
+    try {
+      const r = await fetch(`/api/import/${b.dataset.id}/usun`, {method: 'POST', headers: {'X-Requested-With': 'invapp'}}), d = await r.json();
+      if (!r.ok) { toast(d.blad || 'Nie udało się usunąć pliku'); b.disabled = false; b.textContent = 'Usuń'; return; }
+      toast(`Usunięto: ${d.usuniete_operacje} operacji` + (d.usuniete_konta.length ? `, konta: ${d.usuniete_konta.join(', ')}` : '') + '.');
+      setTimeout(() => location.reload(), 900);
+    } catch (e) { toast('Brak połączenia z aplikacją'); b.disabled = false; b.textContent = 'Usuń'; }
+  });
+
   // ---------------------------------------------------------------- status zadania w tle (ceny, historia)
   async function pollStatus() {
     try {

@@ -66,10 +66,12 @@ def load(scope_key="all"):
         data = {"data_dir": str(config.data_dir()), "dev": config.is_dev_data(), "scope_key": scope_key, "scope_code": code, "scope_title": title,
                 "brokers": [{"key": b.key, "name": b.name, "help": b.file_help} for b in brokers.BROKERS],
                 "accept": ",".join(sorted({e for b in brokers.BROKERS for e in b.accept}))}
-        data["batches"] = q("""select b.source_file_name, b.status, b.rows_read, b.rows_inserted, b.rows_duplicate, b.rows_conflict, b.rows_unmapped, b.rows_ignored, b.started_at,
+        data["batches"] = q("""select b.batch_id, b.source_file_name, b.status, b.rows_read, b.rows_inserted, b.rows_duplicate, b.rows_conflict, b.rows_unmapped, b.rows_ignored, b.started_at,
                                       f.code as broker
                                from import_batches b join financial_institutions f using (broker_id) where f.code = any(%s) order by b.batch_id""", (list(_brokers_of(scope_key)),))
         data["empty"] = not q("select 1 from import_batches limit 1")
+        data["all_batches"] = q("""select b.batch_id, b.source_file_name, b.rows_inserted, b.rows_duplicate, b.started_at, f.name as broker
+                                   from import_batches b join financial_institutions f using (broker_id) where b.status = 'COMMITTED' order by b.batch_id desc""")
         summ = {r["scope_code"]: r for r in q("select scope_code, has_data, positions from v_scope_summary")}
         data["tabs"] = [{"key": k, "title": t, "has_data": bool(summ.get(c, {}).get("has_data"))} for k, (c, t) in SCOPES.items()]
         data["has_data"] = bool(summ.get(code, {}).get("has_data"))
