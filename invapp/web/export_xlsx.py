@@ -94,7 +94,7 @@ def build(scope_key="all"):
            [[r["month"], r["dividends"], r["interest"], r["rewards"], r["fees"]] for r in inc.get("months") or []], {2: PLN, 3: PLN, 4: PLN, 5: PLN})
 
     if m.get("available"):
-        mrows = [("Zysk od wpłat", m.get("gain_pct_on_purchases"), PCT), ("Zwrot TWR od początku", m.get("twr_total"), PCT), ("TWR rocznie (CAGR)", m.get("twr_annualized"), PCT),
+        mrows = [("Zysk od wpłat netto", m.get("gain_pct_on_net"), PCT), ("Zwrot TWR od początku", m.get("twr_total"), PCT), ("TWR rocznie (CAGR)", m.get("twr_annualized"), PCT),
                  ("XIRR rocznie", m.get("xirr"), PCT), ("XIRR z dywidendami", m.get("xirr_with_income"), PCT), ("Maks. obsunięcie", (m.get("drawdown") or {}).get("depth"), PCT),
                  ("Zmienność roczna", m.get("volatility"), PCT), ("Stopa dywidendy (12 m)", m.get("dividend_yield"), PCT)]
         mrows += [(f"Zwrot {k}", v, PCT) for k, v in (m.get("windows") or {}).items()]

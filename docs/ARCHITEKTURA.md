@@ -87,7 +87,7 @@ CLAUDE.md                   skrót zasad i poleceń dla pracy z kodem (także z 
     gotówki z księgi) **doliczane tylko do bieżącej wartości portfela** (kafelek, alokacja). Zysk, wpłaty, wykresy i wskaźniki bez zmian
     (`assets_value` = inwestycje; `total_value` = inwestycje + włączona gotówka).
 * **Zwrot %** (`pricing/metrics.return_series`): TWR i TWR z dywidendami (indeksy, przeliczane od początku widocznego okresu), zysk / wpłaty
-  netto, zysk / suma wpłat, XIRR od początku do dnia (co tydzień), CAGR. Ostatni punkt każdej miary = wartość z kafelków (test).
+  netto, zysk / suma zakupów (bez odejmowania sprzedaży), XIRR od początku do dnia (co tydzień), CAGR. Ostatni punkt każdej miary = wartość z kafelków (test).
 * **Indeksy** (`pricing/benchmarks.py`, migracja 0016): Nasdaq-100 (^NDX), S&P 500 (^GSPC), MSCI World (^990100-USD-STRD) – indeksy cenowe;
   WIG20 – ETF Beta WIG20TR (Yahoo nie podaje historii indeksu WIG20). Waluta indeksu z konfiguracji, sprawdzana z Yahoo; w PLN kursem dnia.
 * **Ekspozycja** (`pricing/profiles.py`, migracja 0019): typ, sektor i giełda wg wyszukiwarki Yahoo (tylko symbol), odświeżane co 30 dni.

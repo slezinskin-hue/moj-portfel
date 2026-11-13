@@ -221,7 +221,7 @@
     {k: 'twr', key: 'twr_lvl', label: 'TWR', color: 'var(--c3)', rebase: true, width: 2.4, opis: 'Stopa zwrotu ważona czasem – nie zależy od tego, kiedy i ile wpłacałeś. Liczona od początku widocznego okresu; do porównań z indeksami.'},
     {k: 'twr_inc', key: 'twr_inc', label: 'TWR z dywidendami', color: 'var(--c4)', rebase: true, opis: 'TWR, w którym wypłacone dywidendy netto liczą się jako zwrot (jak w indeksach z dywidendami).'},
     {k: 'gain_net', key: 'gain_net', label: 'Zysk / wpłaty netto', color: 'var(--c1)', opis: 'Zysk (wartość − wpłaty netto) podzielony przez wpłaty netto w danym dniu – prosta stopa zwrotu od początku.'},
-    {k: 'gain_gross', key: 'gain_gross', label: 'Zysk / suma wpłat', color: 'var(--c2)', opis: 'Zysk podzielony przez sumę wszystkich wpłat (bez odejmowania wypłat) – jak kafelek „Zysk od wpłat”.'},
+    {k: 'gain_gross', key: 'gain_gross', label: 'Zysk / suma zakupów', color: 'var(--c2)', opis: 'Zysk podzielony przez sumę wszystkich zakupów bez odejmowania sprzedaży – zakup za pieniądze ze sprzedaży liczy się ponownie, więc procent jest niższy niż od wpłat netto.'},
     {k: 'xirr', key: 'xirr', label: 'XIRR (rocznie)', color: 'var(--c5)', connect: true, opis: 'Roczna stopa ważona pieniądzem od początku do danego dnia (co tydzień), uwzględnia moment i wielkość wpłat. Od 90 dni historii.'},
     {k: 'cagr', key: 'cagr', label: 'TWR rocznie (CAGR)', color: 'var(--c6)', opis: 'TWR od początku przeliczony na skalę roku. Od roku historii.'},
   ];
@@ -347,7 +347,7 @@
     note.innerHTML = `Okres ${esc(m.first_date)} – ${esc(m.last_date)} (${m.days} dni).` + (m.days < 365 ? ' Historia krótsza niż rok – stopy roczne nie są liczone.' : '') + (m.estimated_days ? ` <span class="warn">${m.estimated_days} dni z oszacowanymi cenami.</span>` : '');
     const t = (l, k, v, s, c) => `<div class="m"><div class="l">${l} ${k ? info(k) : ''}</div><div class="v ${c || ''}">${v}</div><div class="s">${s || ''}</div></div>`;
     $('#met-tiles').innerHTML =
-      t('Zysk od wpłat', 'gain', pct(m.gain_pct_on_purchases), zlS(m.gain) + ' przy wpłatach ' + zl0(m.total_purchases), cls(m.gain)) +
+      t('Zysk od wpłat netto', 'gain', pct(m.gain_pct_on_net), zlS(m.gain) + ' przy wpłatach netto ' + zl0(m.invested_net), cls(m.gain)) +
       t('Zwrot TWR od początku', 'twr', pct(m.twr_total), m.twr_annualized === null ? 'rocznie: od 365 dni' : 'rocznie (CAGR) ' + pct(m.twr_annualized), cls(m.twr_total)) +
       t('XIRR (rocznie)', 'xirr', pct(m.xirr), m.xirr_with_income === null ? 'wg Twoich wpłat i wypłat' : 'z dywidendami ' + pct(m.xirr_with_income), cls(m.xirr)) +
       t('Od początku roku', 'twr', pct(m.windows.YTD), '12 miesięcy: ' + pct(m.windows['12M']), cls(m.windows.YTD)) +
