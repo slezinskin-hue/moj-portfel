@@ -54,6 +54,10 @@ class TradeRepublic(Broker):
     def rebuild_derived(self, conn):
         return derive.rebuild_fifo(conn, "TR")
 
+    def relink(self, conn, report):
+        imp = TrImporter(conn)
+        imp._link_rewards(report); imp._classify_flows(report)
+
     # ---- pytanie: gotowka jako lokata (stopa wyznaczona z wyplaconych odsetek; uzytkownik potwierdza)
     def _deposit_candidates(self, conn):
         from invapp.core import deposits
@@ -76,7 +80,7 @@ class TradeRepublic(Broker):
         for c in self._deposit_candidates(conn):
             t, pct = c["terms"], f"{c['rate'] * 100:.2f}".replace(".", ",")
             if t is None:
-                out.append({"id": f"tr-deposit-{c['account_id']}", "tytul": "Gotówka w Trade Republic jako lokata",
+                out.append({"id": f"tr-deposit-{c['account_id']}", "kategoria": "lokata", "tytul": "Gotówka w Trade Republic jako lokata",
                             "tresc": f"Gotówka na koncie „{c['name']}” jest oprocentowana. Z wypłaconych odsetek wynika {pct}% rocznie "
                                      f"(odsetki liczone codziennie od salda, wypłacane co miesiąc; model odtwarza {c['reproduced']} z {c['payouts']} wypłat). "
                                      f"Czy liczyć tę gotówkę jako lokatę ({pct}% rocznie, kapitalizacja co miesiąc, podatek Belki 19%)? Wtedy wartość aktywów = "
@@ -84,7 +88,7 @@ class TradeRepublic(Broker):
                             "odpowiedzi": [{"wartosc": "tak", "etykieta": f"Tak, lokata {pct}%"}, {"wartosc": "nie", "etykieta": "Nie, pomijaj gotówkę"}]})
             elif t["treat_as_deposit"] and abs(D(str(t["annual_rate"])) - c["rate"]) >= D("0.0001"):
                 old = f"{D(str(t['annual_rate'])) * 100:.2f}".replace(".", ",")
-                out.append({"id": f"tr-deposit-{c['account_id']}", "tytul": "Zmiana oprocentowania gotówki w Trade Republic",
+                out.append({"id": f"tr-deposit-{c['account_id']}", "kategoria": "lokata", "tytul": "Zmiana oprocentowania gotówki w Trade Republic",
                             "tresc": f"Z ostatniej wypłaty odsetek ({c['last_payout']}) wynika {pct}% rocznie, a zapisane jest {old}%. "
                                      f"Zaktualizować oprocentowanie lokaty?",
                             "odpowiedzi": [{"wartosc": "tak", "etykieta": f"Tak, {pct}%"}, {"wartosc": "zostaw", "etykieta": f"Zostaw {old}%"}]})

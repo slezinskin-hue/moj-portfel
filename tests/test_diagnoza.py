@@ -9,9 +9,9 @@ from invapp.pricing import diagnose  # noqa: E402
 
 setUpModule = tm.setUpModule
 tearDownModule = tm.tearDownModule
-Q_CCY = {"id": "xtb-currency-PL", "broker": "xtb", "tytul": "Waluta instrumentów .PL (GPW)", "odpowiedzi": [{"wartosc": "tak", "etykieta": "Tak, w PLN"}, {"wartosc": "nie", "etykieta": "Nie"}]}
-Q_SPLIT = {"id": "xtb-split-7", "broker": "xtb", "tytul": "Podział akcji AAA.PL 10:1?", "odpowiedzi": [{"wartosc": "auto", "etykieta": "Zdecyduj za mnie"}]}
-Q_DEP = {"id": "tr-deposit-3", "broker": "tr", "tytul": "Zmiana oprocentowania", "odpowiedzi": [{"wartosc": "tak", "etykieta": "Tak, 5,50%"}, {"wartosc": "zostaw", "etykieta": "Zostaw"}]}
+Q_CCY = {"id": "xtb-currency-PL", "kategoria": "waluta", "broker": "xtb", "tytul": "Waluta instrumentów .PL (GPW)", "odpowiedzi": [{"wartosc": "tak", "etykieta": "Tak, w PLN"}, {"wartosc": "nie", "etykieta": "Nie"}]}
+Q_SPLIT = {"id": "xtb-split-7", "kategoria": "split", "broker": "xtb", "tytul": "Podział akcji AAA.PL 10:1?", "odpowiedzi": [{"wartosc": "auto", "etykieta": "Zdecyduj za mnie"}]}
+Q_DEP = {"id": "tr-deposit-3", "kategoria": "lokata", "broker": "tr", "tytul": "Zmiana oprocentowania", "odpowiedzi": [{"wartosc": "tak", "etykieta": "Tak, 5,50%"}, {"wartosc": "zostaw", "etykieta": "Zostaw"}]}
 
 
 class TestDiagnose(tm.Base):

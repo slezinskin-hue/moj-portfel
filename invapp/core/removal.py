@@ -167,15 +167,9 @@ def _remove(cur, conn, batch_id, code, broker_id, others):
     forgotten = _forget_orphan_decisions(cur, broker_id)
     # 7. powiazania i warstwa pochodna od nowa (te same procedury co przy imporcie)
     report = {"warnings": [], "info": []}
-    if code == "XTB":
-        from invapp.brokers.xtb.importer import XtbImporter
-        imp = XtbImporter(conn)
-        imp.link_wht(report); imp.link_sec_corrections(report); imp.group_orders(report); imp.link_transfers(report)
-        imp.classify_flows(report); imp.detect_corporate_actions(report)
-    elif code == "TR":
-        from invapp.brokers.trade_republic.importer import TrImporter
-        imp = TrImporter(conn)
-        imp._link_rewards(report); imp._classify_flows(report)
+    b = brokers.by_code(code)
+    if b is not None:
+        b.relink(conn, report)                                    # ta sama procedura co przy imporcie (kazdy broker wie, co laczy)
     # kontrahenci zaproponowani automatycznie (bez decyzji uzytkownika), ktorych nic juz nie dotyczy
     cur.execute("""delete from counterparties c where c.ownership_status in ('UNKNOWN', 'OWN_CANDIDATE') and c.decided_at is null
                      and not exists (select 1 from flow_classification fc where fc.counterparty_id = c.counterparty_id)""")

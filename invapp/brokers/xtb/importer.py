@@ -27,6 +27,7 @@ class Resolver:
 
     def __init__(self, cur, broker_id):
         self.cur, self.broker_id, self.cache, self.created, self.matched, self.unmatched, self.matched_by_rule = cur, broker_id, {}, [], [], [], []
+        self.ccy_cache = {}
 
     def _spec(self, ticker):
         self.cur.execute("""select instrument_name, isin, currency, instrument_type, source_doc_name, source_doc_sha256, valid_from
@@ -83,8 +84,11 @@ class Resolver:
         return lst
 
     def currency(self, listing_id):
-        self.cur.execute("select trading_currency from listings where listing_id=%s", (listing_id,))
-        return self.cur.fetchone()[0]
+        # pamiec podreczna na czas jednego importu: waluta notowania nie zmienia sie w trakcie (reguly i specyfikacje stosowane sa po imporcie)
+        if listing_id not in self.ccy_cache:
+            self.cur.execute("select trading_currency from listings where listing_id=%s", (listing_id,))
+            self.ccy_cache[listing_id] = self.cur.fetchone()[0]
+        return self.ccy_cache[listing_id]
 
 
 class XtbImporter:
@@ -94,14 +98,19 @@ class XtbImporter:
         self.cur.execute("select broker_id from financial_institutions where code='XTB'")
         self.broker_id = self.cur.fetchone()[0]
         self.resolver = Resolver(self.cur, self.broker_id)
+        self._accounts = {}
 
     # ------------------------------------------------------------------ konta
     def _account_for_product(self, product, file_account_no):
+        key = (product, file_account_no)                           # pamiec podreczna na czas importu (zamiast zapytania na kazdy wiersz)
+        if key in self._accounts:
+            return self._accounts[key]
         self.cur.execute("""select account_id from account_aliases where broker_id=%s and alias_kind='PRODUCT_LABEL' and alias_value=%s and context_account_no=%s""",
                          (self.broker_id, product, file_account_no))
         r = self.cur.fetchone()
         if not r:
             raise ImportFailed(f"Nowa etykieta produktu '{product}' w pliku konta {file_account_no}: wskaż konto (alias) przed importem – nie zgaduję.")
+        self._accounts[key] = r[0]
         return r[0]
 
     def _file_account(self, account_no):
@@ -112,9 +121,9 @@ class XtbImporter:
         return r[0]
 
     # ------------------------------------------------------------------ import pliku
-    def import_file(self, path):
+    def import_file(self, path, pf=None):
         cur = self.cur
-        pf = xtb.parse(path)
+        pf = pf or xtb.parse(path)                                 # plik juz odczytany przez wolajacego - bez ponownego czytania arkusza
         file_account = self._file_account(pf.account_no)
         cur.execute("select pg_advisory_xact_lock(hashtext('import:XTB'))")
         cur.execute("select count(*) from import_batches where source_file_sha256=%s and status='COMMITTED'", (pf.sha256,))
@@ -156,8 +165,13 @@ class XtbImporter:
     # ------------------------------------------------------------------ Cash Operations
     def _import_cash(self, pf, batch, file_account, report, outcome):
         cur = self.cur
-        for rec in pf.cash:
-            cand = xtb.normalize_cash(rec)
+        cands = [(rec, xtb.normalize_cash(rec)) for rec in pf.cash]
+        # operacje juz zapisane (ponowny import / nowszy eksport): jedno zapytanie na plik zamiast trzech na wiersz; wynik identyczny
+        cur.execute("select dedup_key, txn_id, row_hash from transactions where dedup_key = any(%s)", ([c.dedup_key for _, c in cands if not c.unmapped_reason],))
+        known = {k: (t, h) for k, t, h in cur.fetchall()}
+        seen = []                                                  # DUPLICATE: last_seen_batch_id ustawiane zbiorczo po petli
+        new_rows, waiting, pending = [], [], {}                    # nowe operacje: zapis jednym poleceniem, txn_id przypisywany po zapisie
+        for rec, cand in cands:
             payload = {k: v for k, v in rec.items()}
             if cand.unmapped_reason:
                 outcome("Cash Operations", rec["row"], "DATA", cand.dedup_key, cand.row_hash, payload, "UNMAPPED")
@@ -176,26 +190,48 @@ class XtbImporter:
                     price_ccy, fx, fx_kind = ccy, (eff.quantize(Decimal("0.0000000001")) if eff is not None else None), "EFFECTIVE_IMPLIED"
                 else:
                     price_ccy = "XXX"          # waluta notowania niezweryfikowana (ISO 4217 XXX = brak waluty); kurs efektywny w details
-            cur.execute("""insert into transactions(account_id,broker_id,txn_type,txn_subtype,occurred_at,listing_id,quantity,price,price_currency,gross_amount,cash_amount,cash_currency,
-                                                    fx_rate,fx_rate_kind,commission,broker_position_ref,external_id,external_id_scheme,dedup_key,row_hash,source_kind,
-                                                    first_batch_id,last_seen_batch_id,raw_comment,details)
-                           values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PLN',%s,%s,0,%s,%s,'XTB_CASH_ID',%s,%s,'BROKER_IMPORT',%s,%s,%s,%s)
-                           on conflict (dedup_key) do nothing returning txn_id""",
-                        (account, self.broker_id, cand.txn_type, cand.subtype, cand.occurred_at, listing, cand.quantity, cand.price, price_ccy, gross, cand.cash_amount,
-                         fx, fx_kind, cand.position_ref, cand.external_id, cand.dedup_key, cand.row_hash, batch, batch, cand.comment, J(details)))
-            ins = cur.fetchone()
-            if ins:
-                outcome("Cash Operations", rec["row"], "DATA", cand.dedup_key, cand.row_hash, payload, "INSERTED", ins[0]); continue
-            cur.execute("select txn_id,row_hash from transactions where dedup_key=%s", (cand.dedup_key,))
-            tid, old_hash = cur.fetchone()
-            if old_hash == cand.row_hash:
-                cur.execute("update transactions set last_seen_batch_id=%s, updated_at=now() where txn_id=%s", (batch, tid))
+            if cand.dedup_key in known:
+                tid, old_hash = known[cand.dedup_key]
+                if old_hash == cand.row_hash:
+                    seen.append(tid)
+                    outcome("Cash Operations", rec["row"], "DATA", cand.dedup_key, cand.row_hash, payload, "DUPLICATE", tid)
+                else:
+                    cur.execute("insert into import_conflicts(batch_id,dedup_key,existing_hash,incoming_hash,incoming_payload) values (%s,%s,%s,%s,%s)",
+                                (batch, cand.dedup_key, old_hash, cand.row_hash, J(payload)))
+                    outcome("Cash Operations", rec["row"], "DATA", cand.dedup_key, cand.row_hash, payload, "CONFLICT", tid)
+                    report["warnings"].append(f"Cash Operations, wiersz {rec['row']}: ten sam klucz {cand.dedup_key}, inna treść – zachowano istniejący wiersz (konflikt do decyzji).")
+                continue
+            if cand.dedup_key in pending:                           # ten sam klucz drugi raz w tym samym pliku: duplikat albo konflikt (po zapisie pierwszego)
+                waiting.append((rec, cand, payload, False))
+                continue
+            pending[cand.dedup_key] = cand.row_hash
+            new_rows.append((account, self.broker_id, cand.txn_type, cand.subtype, cand.occurred_at, listing, cand.quantity, cand.price, price_ccy, gross, cand.cash_amount,
+                             fx, fx_kind, cand.position_ref, cand.external_id, cand.dedup_key, cand.row_hash, batch, batch, cand.comment, J(details)))
+            waiting.append((rec, cand, payload, True))
+        ids = {}
+        if new_rows:
+            ids = dict(execute_values(cur, """insert into transactions(account_id,broker_id,txn_type,txn_subtype,occurred_at,listing_id,quantity,price,price_currency,gross_amount,
+                                                                     cash_amount,cash_currency,fx_rate,fx_rate_kind,commission,broker_position_ref,external_id,external_id_scheme,
+                                                                     dedup_key,row_hash,source_kind,first_batch_id,last_seen_batch_id,raw_comment,details)
+                                              values %s on conflict (dedup_key) do nothing returning dedup_key, txn_id""", new_rows,
+                                      template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PLN',%s,%s,0,%s,%s,'XTB_CASH_ID',%s,%s,'BROKER_IMPORT',%s,%s,%s,%s)",
+                                      page_size=500, fetch=True))
+        for rec, cand, payload, first in waiting:
+            tid = ids.get(cand.dedup_key)
+            if tid is None:
+                raise ImportFailed(f"Cash Operations, wiersz {rec['row']}: klucz {cand.dedup_key} pojawił się w trakcie importu – przerwano (spróbuj ponownie).")
+            if first:
+                outcome("Cash Operations", rec["row"], "DATA", cand.dedup_key, cand.row_hash, payload, "INSERTED", tid)
+            elif pending[cand.dedup_key] == cand.row_hash:
+                seen.append(tid)
                 outcome("Cash Operations", rec["row"], "DATA", cand.dedup_key, cand.row_hash, payload, "DUPLICATE", tid)
             else:
                 cur.execute("insert into import_conflicts(batch_id,dedup_key,existing_hash,incoming_hash,incoming_payload) values (%s,%s,%s,%s,%s)",
-                            (batch, cand.dedup_key, old_hash, cand.row_hash, J(payload)))
+                            (batch, cand.dedup_key, pending[cand.dedup_key], cand.row_hash, J(payload)))
                 outcome("Cash Operations", rec["row"], "DATA", cand.dedup_key, cand.row_hash, payload, "CONFLICT", tid)
                 report["warnings"].append(f"Cash Operations, wiersz {rec['row']}: ten sam klucz {cand.dedup_key}, inna treść – zachowano istniejący wiersz (konflikt do decyzji).")
+        if seen:
+            cur.execute("update transactions set last_seen_batch_id=%s, updated_at=now() where txn_id = any(%s)", (batch, seen))
         if pf.cash_total is not None:
             outcome("Cash Operations", pf.cash_total["row"], "FOOTER", None, None, {"Total": pf.cash_total["amount"]}, "IGNORED")
 
@@ -203,6 +239,8 @@ class XtbImporter:
     def _import_closed(self, pf, batch, file_account, report, outcome):
         cur = self.cur
         keys = xtb.closed_dedup_keys(pf.closed)
+        cur.execute("select dedup_key, row_hash from broker_closed_positions where dedup_key = any(%s)", (list(keys),))
+        known = dict(cur.fetchall())                               # pozycje juz zapisane: jedno zapytanie na plik
         for rec, key in zip(pf.closed, keys):
             payload = dict(rec)
             h = xtb.closed_row_hash(rec)
@@ -210,6 +248,15 @@ class XtbImporter:
             account = self._account_for_product(product, pf.account_no)
             listing = self.resolver.listing(clean(rec["Ticker"]), clean(rec["Instrument"]), clean(rec["Category"]))
             pid = str(int(rec["Position ID"]))
+            if key in known:
+                if known[key] == h:
+                    outcome("Closed Positions", rec["row"], "DATA", key, h, payload, "DUPLICATE")
+                else:
+                    cur.execute("insert into import_conflicts(batch_id,dedup_key,existing_hash,incoming_hash,incoming_payload) values (%s,%s,%s,%s,%s)",
+                                (batch, key, known[key], h, J(payload)))
+                    outcome("Closed Positions", rec["row"], "DATA", key, h, payload, "CONFLICT")
+                    report["warnings"].append(f"Closed Positions, wiersz {rec['row']}: konflikt klucza {key}.")
+                continue
             cur.execute("""insert into broker_closed_positions(account_id,listing_id,broker_position_ref,volume,open_price,close_price,opened_at,closed_at,purchase_value,sale_value,profit_loss,
                                                                open_fx_rate,close_fx_rate,close_origin,comment,dedup_key,row_hash,first_batch_id)
                            values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (dedup_key) do nothing returning bcp_id""",
@@ -218,15 +265,9 @@ class XtbImporter:
                          clean(rec.get("Close Origin")), clean(rec.get("Comment")), key, h, batch))
             ins = cur.fetchone()
             if ins:
+                known[key] = h
                 outcome("Closed Positions", rec["row"], "DATA", key, h, payload, "INSERTED"); continue
-            cur.execute("select row_hash from broker_closed_positions where dedup_key=%s", (key,))
-            if cur.fetchone()[0] == h:
-                outcome("Closed Positions", rec["row"], "DATA", key, h, payload, "DUPLICATE")
-            else:
-                cur.execute("select row_hash from broker_closed_positions where dedup_key=%s", (key,)); old = cur.fetchone()[0]
-                cur.execute("insert into import_conflicts(batch_id,dedup_key,existing_hash,incoming_hash,incoming_payload) values (%s,%s,%s,%s,%s)", (batch, key, old, h, J(payload)))
-                outcome("Closed Positions", rec["row"], "DATA", key, h, payload, "CONFLICT")
-                report["warnings"].append(f"Closed Positions, wiersz {rec['row']}: konflikt klucza {key}.")
+            raise ImportFailed(f"Closed Positions, wiersz {rec['row']}: klucz {key} pojawił się w trakcie importu – przerwano (spróbuj ponownie).")
         if pf.closed_footer is not None:
             outcome("Closed Positions", pf.closed_footer["row"], "FOOTER", None, None, pf.closed_footer, "IGNORED")
 

@@ -105,12 +105,12 @@ def load(scope_key="all"):
                  from transactions t join accounts a using (account_id) join listings l using (listing_id)
                  left join transactions w on w.related_txn_id = t.txn_id and w.txn_type = 'TAX_WITHHOLDING'
                  where t.txn_type = 'DIVIDEND' and t.status = 'ACTIVE' and t.account_id in {sc_accounts} order by t.occurred_at desc limit 20""", (code,))
-        if "XTB" in _brokers_of(scope_key):
-            data["adjustments"] = q("select * from v_active_adjustments order by action_id")
-            data["cost_recon"] = q("select t.*, l.display_name from v_cost_reconciliation_totals t join listings l using (listing_id)")
-            data["issues"] = q("select code, severity, message from data_quality_issues order by issue_id")
-        else:
-            data["adjustments"], data["cost_recon"], data["issues"] = [], [], []
+        # korekty (splity), uzgodnienie kosztow i ostrzezenia jakosci danych - dla kont w zakresie (dowolny broker, ktory je ma)
+        data["adjustments"] = q(f"""select * from v_active_adjustments a where exists (select 1 from transactions t
+                                    where t.listing_id = a.listing_id and t.account_id in {sc_accounts}) order by action_id""", (code,))
+        data["cost_recon"] = q(f"""select t.*, l.display_name from v_cost_reconciliation_totals t join listings l using (listing_id)
+                                   where exists (select 1 from transactions x where x.listing_id = t.listing_id and x.account_id in {sc_accounts})""", (code,))
+        data["issues"] = q("select code, severity, message from data_quality_issues order by issue_id")
         data["instruments"] = q(f"""select {alias} as ticker, l.display_name as instrument, l.trading_currency as currency, l.currency_status, s.isin, s.isin_status, l.mic_status, l.price_unit_status,
                                            l.currency_source
                                     from listings l join securities s using (security_id)

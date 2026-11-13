@@ -244,6 +244,36 @@ class TestNbpAndPrivileges(PricingBase):
         for v in ("v_live_position_values", "v_scope_result_live", "v_latest_quote", "v_fx_for_valuation"):
             self.assertTrue(self.one(priv, (v, "SELECT")), v)
 
+    def test_latest_quote_tables_match_full_history_scan(self):
+        """Migracja 0020: najnowsze notowanie/kurs z tabel wskazan = to samo, co DISTINCT ON po calej historii (takze gdy notowania przychodza nie po kolei)."""
+        import random
+        s = self.one("insert into securities(name,asset_class) values ('X','STOCK') returning security_id")
+        l = self.one("insert into listings(security_id,display_name,trading_currency) values (%s,'X','USD') returning listing_id", (s,))
+        for prov in ("YAHOO", "ALT"):
+            self.cur.execute("""insert into listing_provider_symbols(listing_id,provider,provider_symbol,status,quote_currency,price_unit,checked_at,evidence)
+                                values (%s,%s,'X','VERIFIED','USD','MAJOR',now(),'{}')""", (l, prov))
+        rnd = random.Random(7)
+        stamps = [SNAP + timedelta(minutes=m) for m in range(60)]
+        rnd.shuffle(stamps)                                                              # kolejnosc dopisywania inna niz kolejnosc czasu
+        for i, t in enumerate(stamps):
+            self.cur.execute("insert into market_quotes(listing_id,provider,provider_symbol,price,currency,price_unit,quoted_at) values (%s,%s,'X',%s,'USD','MAJOR',%s) on conflict do nothing",
+                             (l, ("YAHOO", "ALT")[i % 2], 100 + i, t))
+            self.cur.execute("insert into fx_quotes(base,quote,rate,provider,quoted_at) values ('USD','PLN',%s,%s,%s) on conflict do nothing", (D("3.9") + D(i) / 1000, ("YAHOO", "ALT")[i % 2], t))
+        got = self.rows("select listing_id, provider, price, quoted_at from v_latest_quote where listing_id = %s", (l,))
+        want = self.rows("""select distinct on (q.listing_id) q.listing_id, q.provider, q.price, q.quoted_at from market_quotes q
+                            join listing_provider_symbols m on m.listing_id = q.listing_id and m.provider = q.provider and m.status = 'VERIFIED'
+                            where q.listing_id = %s order by q.listing_id, q.quoted_at desc""", (l,))
+        self.assertEqual(got, want); self.assertEqual(got[0]["quoted_at"], max(stamps))
+        self.cur.execute("update listing_provider_symbols set status = 'REJECTED' where listing_id = %s and provider = %s", (l, got[0]["provider"]))
+        other = self.rows("select provider, quoted_at from v_latest_quote where listing_id = %s", (l,))[0]           # najnowsze z pozostalego powiazania
+        self.assertNotEqual(other["provider"], got[0]["provider"])
+        self.assertEqual(other["quoted_at"], self.one("select max(quoted_at) from market_quotes where listing_id = %s and provider = %s", (l, other["provider"])))
+        fx = self.rows("select rate, as_of from v_fx_for_valuation where base = 'USD' and quote = 'PLN'")[0]
+        self.assertEqual((fx["rate"], fx["as_of"]), tuple(self.cur.execute("select rate, quoted_at from fx_quotes where base='USD' and quote='PLN' order by quoted_at desc limit 1") or self.cur.fetchone()))
+        priv = "select has_table_privilege('investing_app', %s, %s)"
+        for t in ("market_quote_latest", "fx_quote_latest"):
+            self.assertTrue(self.one(priv, (t, "SELECT"))); self.assertFalse(self.one(priv, (t, "INSERT"))); self.assertFalse(self.one(priv, (t, "UPDATE")))
+
     def test_symbol_rules(self):
         y = YahooProvider(fetch=lambda u: "")
         self.assertEqual([y.symbol_for(s) for s in ("ABC.PL", "XYZ.NL", "ETF.DE", "FND.UK", "AAPL.US", "XYZ.ZZ", "NOSUFFIX")],

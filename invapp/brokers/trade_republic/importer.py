@@ -5,14 +5,13 @@ Przeplywy gotowkowe: klasa EXTERNAL (domyslnie) - kontrahent (IBAN) jest zapisan
 """
 from collections import defaultdict
 from decimal import Decimal
-from datetime import timedelta
 
-from psycopg2.extras import Json, execute_values
+from psycopg2.extras import Json
 
 from . import parser as tr
-from invapp.core.common import ImportFailed, as_utc, jsonable
+from invapp.core.common import jsonable
+from invapp.core.ledger_import import ImportBatch
 
-OUTCOMES = ("INSERTED", "DUPLICATE", "CONFLICT", "UNMAPPED", "IGNORED")
 CLASSIFIER_VERSION = "import-tr-1.0"
 SCOPES = ("BROKER:TR", "INVESTMENT_ALL", "NET_WORTH")
 
@@ -78,7 +77,7 @@ class TrImporter:
     def import_file(self, path):
         cur = self.cur
         pf = tr.parse(path)
-        cur.execute("select pg_advisory_xact_lock(hashtext('import:TR'))")
+        cur.execute("select pg_advisory_xact_lock(hashtext('import:TR'))")       # konta zakladane pod ta sama blokada co import
         accounts, created = {}, []
         for at in sorted(pf.account_types):
             acct, new = ensure_account(cur, self.broker_id, at)
@@ -86,68 +85,33 @@ class TrImporter:
             if new:
                 created.append(f"Trade Republic{'' if at == 'DEFAULT' else ' (' + at + ')'}")
         main = accounts[sorted(accounts)[0]] if accounts else None
-        cur.execute("select count(*) from import_batches where source_file_sha256=%s and status='COMMITTED'", (pf.sha256,))
-        same_before = cur.fetchone()[0]
-        cur.execute("""insert into import_batches(broker_id,source_file_name,source_file_sha256,parser_name,parser_version,period_from,period_to,account_id,status)
-                       values (%s,%s,%s,%s,%s,%s,%s,%s,'RUNNING') returning batch_id""",
-                    (self.broker_id, pf.name, pf.sha256, tr.PARSER_NAME, tr.PARSER_VERSION, as_utc(pf.period_from), as_utc(pf.period_to), main))
-        batch = cur.fetchone()[0]
-        report = {"file": pf.name, "sha256": pf.sha256, "batch_id": batch, "warnings": list(pf.warnings), "info": [], "checks": [], "created_accounts": created,
-                  "same_file_imported_before": same_before, "broker": "TR"}
-        if same_before:
-            report["warnings"].append("Ten plik (ta sama suma SHA-256) był już zaimportowany; gwarancja idempotencji wynika z kluczy deduplikacji.")
-        counters, raw = defaultdict(int), []
-
-        def outcome(row, key, h, payload, oc, txn_id=None):
-            counters[oc] += 1; counters["read"] += 1
-            raw.append((batch, "CSV", row, "DATA", key, h, J(payload), oc, txn_id))
-
-        for rec in pf.records:
-            cand = tr.normalize(rec)
+        # wspolny silnik partii (core/ledger_import.py): idempotencja, konflikty, surowe wiersze, liczniki, kontrola G3
+        b = ImportBatch(self.conn, "TR", pf.name, pf.sha256, tr.PARSER_NAME, tr.PARSER_VERSION, account_id=main,
+                        period_from=pf.period_from, period_to=pf.period_to, warnings=pf.warnings)
+        report = b.report
+        report["created_accounts"] = created
+        cands = [tr.normalize(rec) for rec in pf.records]
+        b.prefetch([c.dedup_key for c in cands if not c.unmapped_reason] + [ch.dedup_key for c in cands if not c.unmapped_reason for ch in c.children])
+        for cand in cands:
             if cand.unmapped_reason:
-                outcome(cand.row, cand.dedup_key, cand.row_hash, cand.payload, "UNMAPPED")
+                b.raw_row("CSV", cand.row, "DATA", cand.dedup_key, cand.row_hash, cand.payload, "UNMAPPED")
                 report["warnings"].append(f"Wiersz {cand.row}: {cand.unmapped_reason}.")
                 continue
-            tid = self._insert(cand, accounts[cand.account_type], batch, report)
-            outcome(cand.row, cand.dedup_key, cand.row_hash, cand.payload, tid[1], tid[0])
+            b.write_transaction(self._values(cand, accounts[cand.account_type]), "CSV", cand.row, cand.payload)
             for ch in cand.children:
-                t2 = self._insert(ch, accounts[ch.account_type], batch, report)
-                counters[t2[1]] += 1; counters["read"] += 1
-                raw.append((batch, "CSV (podatek z wiersza)", cand.row, "DATA", ch.dedup_key, ch.row_hash, J(ch.payload), t2[1], t2[0]))
+                b.write_transaction(self._values(ch, accounts[ch.account_type]), "CSV (podatek z wiersza)", cand.row, ch.payload)
         self._link_rewards(report)
         self._classify_flows(report)
         self._validate(pf, report, accounts)
-        execute_values(cur, "insert into raw_rows(batch_id,sheet_name,row_number,row_kind,natural_key,row_hash,payload,outcome,txn_id) values %s", raw, page_size=500)
-        total = sum(counters[o] for o in OUTCOMES)
-        if total != counters["read"]:
-            raise ImportFailed(f"Kontrola G3 nie przeszła: suma wyników ({total}) ≠ liczba wierszy ({counters['read']}).")
-        report["counters"] = {o: counters[o] for o in OUTCOMES}; report["counters"]["read"] = counters["read"]
-        cur.execute("""update import_batches set status='COMMITTED', rows_read=%s, rows_inserted=%s, rows_duplicate=%s, rows_conflict=%s, rows_unmapped=%s, rows_ignored=%s,
-                       finished_at=now(), report=%s where batch_id=%s""",
-                    (counters["read"], counters["INSERTED"], counters["DUPLICATE"], counters["CONFLICT"], counters["UNMAPPED"], counters["IGNORED"], J(report), batch))
-        return report
+        return b.finish()
 
-    def _insert(self, c, account, batch, report):
-        cur = self.cur
+    def _values(self, c, account):
+        """Kandydat z parsera -> kolumny ksiegi (transactions)."""
         listing = self.resolver.listing(c.isin, c.name, c.asset_class) if c.isin else None
-        price_ccy = "PLN" if c.txn_type in ("BUY", "SELL") else None          # cena w PLN wynika wprost z kolumny currency pliku
-        cur.execute("""insert into transactions(account_id,broker_id,txn_type,txn_subtype,occurred_at,listing_id,quantity,price,price_currency,gross_amount,cash_amount,cash_currency,
-                                                commission,external_id,external_id_scheme,dedup_key,row_hash,source_kind,first_batch_id,last_seen_batch_id,raw_comment,details)
-                       values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PLN',%s,%s,'TR_TXN_UUID',%s,%s,'BROKER_IMPORT',%s,%s,%s,%s)
-                       on conflict (dedup_key) do nothing returning txn_id""",
-                    (account, self.broker_id, c.txn_type, c.subtype, c.occurred_at, listing, c.quantity, c.price, price_ccy, c.gross, c.cash_amount, c.commission,
-                     c.external_id, c.dedup_key, c.row_hash, batch, batch, c.comment, J(c.details)))
-        ins = cur.fetchone()
-        if ins:
-            return ins[0], "INSERTED"
-        cur.execute("select txn_id,row_hash from transactions where dedup_key=%s", (c.dedup_key,))
-        tid, old = cur.fetchone()
-        if old == c.row_hash:
-            cur.execute("update transactions set last_seen_batch_id=%s, updated_at=now() where txn_id=%s", (batch, tid))
-            return tid, "DUPLICATE"
-        cur.execute("insert into import_conflicts(batch_id,dedup_key,existing_hash,incoming_hash,incoming_payload) values (%s,%s,%s,%s,%s)", (batch, c.dedup_key, old, c.row_hash, J(c.payload)))
-        report["warnings"].append(f"Wiersz {c.row}: ten sam klucz {c.dedup_key}, inna treść – zachowano istniejący wiersz (konflikt do decyzji).")
-        return tid, "CONFLICT"
+        return {"account_id": account, "txn_type": c.txn_type, "txn_subtype": c.subtype, "occurred_at": c.occurred_at, "listing_id": listing,
+                "quantity": c.quantity, "price": c.price, "price_currency": "PLN" if c.txn_type in ("BUY", "SELL") else None,   # cena w PLN z kolumny currency pliku
+                "gross_amount": c.gross, "cash_amount": c.cash_amount, "commission": c.commission, "external_id": c.external_id,
+                "external_id_scheme": "TR_TXN_UUID", "dedup_key": c.dedup_key, "row_hash": c.row_hash, "raw_comment": c.comment, "details": c.details}
 
     def _link_rewards(self, report):
         """Stockperk: wplyw gotowkowy chwile przed zakupem akcji za te sama kwote (ten sam ISIN, < 1 s) - powiazanie nagrody z zakupem."""

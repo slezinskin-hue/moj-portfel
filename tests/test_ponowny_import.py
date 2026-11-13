@@ -75,6 +75,8 @@ class TestRepeatedImports(tm.Base):
         self.assertEqual(self.ledger(), first)
         c = self.imp(self.csv("Eksport transakcji (2).csv", JAN + FEB))                  # nowszy eksport: stare + nowe operacje
         self.assertEqual((c["INSERTED"], c["DUPLICATE"]), (2, 4))
+        last = self.one("select max(batch_id) from import_batches")
+        self.assertEqual(self.one("select count(*) from transactions where last_seen_batch_id = %s", (last,)), 6)   # widziane w najnowszym pliku (takze duplikaty)
         self.assertEqual(self.one("select count(*) from transactions"), 6)
         self.assertEqual(self.one("select count(*) from accounts"), 1)                   # to samo konto, bez duplikatu
         self.assertEqual(self.one("select sum(qty_remaining) from derived_lots"), D("15"))  # 10 + 5 akcji

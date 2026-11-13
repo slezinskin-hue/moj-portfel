@@ -58,7 +58,7 @@
   <div class="view" data-view="portfel">
   <section id="przeglad">
     <div class="kpis">
-      <div class="kpi hero"><div class="l" id="k-value-l">Wartość portfela{% if d.scope_key != 'xtb' %} (papiery + lokaty){% endif %}</div><div class="v" id="k-value"><span class="skeleton"></span></div><div class="s" id="k-value-s"></div><div id="k-day" style="margin-top:6px"></div></div>
+      <div class="kpi hero"><div class="l" id="k-value-l">Wartość portfela</div><div class="v" id="k-value"><span class="skeleton"></span></div><div class="s" id="k-value-s"></div><div id="k-day" style="margin-top:6px"></div></div>
       <div class="kpi"><div class="l">Zysk całkowity <span class="info" data-t="Zysk z inwestycji (niezrealizowany + zrealizowany) + dywidendy, odsetki, nagrody i opłaty Procent liczony od wpłaconych środków netto (wartość − zysk).">i</span></div><div class="v" id="k-total"><span class="skeleton"></span></div><div class="s" id="k-total-s"></div></div>
       <div class="kpi"><div class="l">Zysk z inwestycji <span class="info" data-t="Niezrealizowany (wartość − koszt otwartych pozycji) + zrealizowany ze sprzedaży. Koszt = gotówka z księgi z opłatami (nie koszt podatkowy).">i</span></div><div class="v" id="k-inv"><span class="skeleton"></span></div><div class="s" id="k-inv-s"></div></div>
       <div class="kpi"><div class="l">Dywidendy, odsetki i inne <span class="info" data-t="Kwoty netto z księgi (po podatku pobranym przez brokera) – tylko wypłacone.">i</span></div><div class="v" id="k-inc"><span class="skeleton"></span></div><div class="s" id="k-inc-s"></div></div>
@@ -155,7 +155,7 @@
       <td class="muted">{{ 'pusty plik, brak operacji' if (a.txn_count == 0 and a.has_batch) else ('jeszcze nie zaimportowano' if a.txn_count == 0 else '') }}</td></tr>{% endfor %}
   </tbody></table></div></div></details>
 
-  {% if d.scope_key != 'tr' %}
+  {% if d.adjustments or d.cost_recon %}
   <details class="sec"><summary>Korekty splitów i uzgodnienie kosztów</summary><div class="body">
     <div class="table-wrap"><table><thead><tr><th>Instrument</th><th>Korekta</th><th class="n">Współczynnik</th><th>Data</th><th>Źródło</th><th>Status</th><th>Użycie</th><th>Źródło oficjalne</th><th class="n">Partie</th></tr></thead><tbody>
     {% for a in d.adjustments %}<tr><td>{{ a.display_name }}</td><td>{{ a.action_type }}</td><td class="n">{{ a.factor|qty }}:1</td>

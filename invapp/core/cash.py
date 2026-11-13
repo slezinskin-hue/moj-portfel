@@ -6,7 +6,7 @@ Gotowka poza inwestycjami i ustawienia aplikacji (migracja 0017; decyzja uzytkow
 * Wolne srodki XTB = saldo gotowki z ksiegi (widok v_cash_balance, PLN) kont XTB. Gotowka Trade Republic jest liczona jako lokata (core/deposits.py).
 * Ustawienia (domyslnie WYLACZONE - liczby bez zmian):
     include_cash      - doliczaj gotowke z kont bankowych do wartosci portfela (tylko zakladka WSZYSTKIE),
-    include_xtb_free  - doliczaj wolne srodki XTB do wartosci portfela (zakladki XTB i WSZYSTKIE).
+    include_xtb_free  - doliczaj wolne srodki brokerow z Broker.free_funds (dzis XTB) do wartosci portfela zakresu, w ktorym sa ich konta.
   Doliczana jest tylko BIEZACA "wartosc portfela"; zysk, wplaty, wykresy i wskazniki zostaja bez zmian (gotowka nie jest inwestycja,
   a dodanie jej do serii bez przeplywu wygladaloby jak zysk).
 """
@@ -114,20 +114,22 @@ def archive(cur, aid):
     cur.execute("update manual_cash_accounts set archived_at = now() where cash_account_id = %s", (aid,))
 
 
-def broker_free_funds(cur, scope_code, broker="XTB"):
-    """Wolne srodki brokera = saldo gotowki z ksiegi (PLN) kont tego brokera w zakresie."""
-    cur.execute("""select a.account_id, a.display_name, a.product_type, coalesce(sum(cb.balance), 0)
+def broker_free_funds(cur, scope_code):
+    """Wolne srodki = saldo gotowki z ksiegi (PLN) kont brokerow, ktorych gotowka to wolne srodki (Broker.free_funds, np. XTB), w zakresie."""
+    from invapp import brokers
+    codes = [b.code for b in brokers.BROKERS if b.free_funds]
+    cur.execute("""select a.account_id, a.display_name, a.product_type, coalesce(sum(cb.balance), 0), f.name
                    from accounts a join financial_institutions f using (broker_id)
                    left join v_cash_balance cb on cb.account_id = a.account_id and cb.cash_currency = 'PLN'
-                   where f.code = %s and a.account_id in (select sa.account_id from scope_accounts sa join scopes s using (scope_id) where s.code = %s)
+                   where f.code = any(%s) and a.account_id in (select sa.account_id from scope_accounts sa join scopes s using (scope_id) where s.code = %s)
                      and exists (select 1 from transactions t where t.account_id = a.account_id)
-                   group by 1, 2, 3 order by 1""", (broker, scope_code))
-    return [{"konto": n, "typ": p, "saldo": Decimal(b).quantize(CENT)} for _, n, p, b in cur.fetchall()]
+                   group by 1, 2, 3, 5 order by 1""", (codes, scope_code))
+    return [{"konto": n, "typ": p, "saldo": Decimal(b).quantize(CENT), "broker": bn} for _, n, p, b, bn in cur.fetchall()]
 
 
 def extra_value(cur, scope_key, scope_code):
     """Gotowka doliczana do wartosci portfela wg ustawien: {"gotowka": kwota|0, "wolne_xtb": kwota|0, "ustawienia": {...}}."""
     st = get_settings(cur)
     cash = sum((a["wartosc_pln"] or 0 for a in accounts(cur)), Decimal(0)) if st["include_cash"] and scope_key == "all" else Decimal(0)
-    free = sum((x["saldo"] for x in broker_free_funds(cur, scope_code)), Decimal(0)) if st["include_xtb_free"] and scope_key in ("all", "xtb") else Decimal(0)
+    free = sum((x["saldo"] for x in broker_free_funds(cur, scope_code)), Decimal(0)) if st["include_xtb_free"] else Decimal(0)   # konta brokera w zakresie
     return {"gotowka": cash, "wolne_xtb": free, "ustawienia": st}

@@ -19,13 +19,14 @@ def _act(kind, label, **kw):
     return {"akcja": kind, "etykieta": label, **kw}
 
 
-def _questions_by_prefix(questions, prefix):
-    return [q for q in questions if q["id"].startswith(prefix)]
+def _questions_of(questions, kategoria):
+    """Pytania brokerow danej kategorii (invapp/brokers/base.QUESTION_CATEGORIES) - niezaleznie od brokera, ktory je zadaje."""
+    return [q for q in questions if q.get("kategoria") == kategoria]
 
 
 def _split_actions(questions, listing_symbols=None):
     out = []
-    for q in _questions_by_prefix(questions, "xtb-split-"):
+    for q in _questions_of(questions, "split"):
         if listing_symbols and not any(s in q["tytul"] for s in listing_symbols):
             continue
         sym = q["tytul"].replace("Podział akcji ", "").rstrip("?")
@@ -54,7 +55,7 @@ def _missing_prices(cur, check, questions, accounts):
             waiting.append(sym)
     if no_ccy:
         reasons.append(f"Waluta notowań nie jest potwierdzona dla: {', '.join(no_ccy)} – bez niej aplikacja nie pobiera cen (nie zgaduje waluty z końcówki symbolu).")
-        for q in _questions_by_prefix(questions, "xtb-currency-"):
+        for q in _questions_of(questions, "waluta"):
             yes = next((o for o in q["odpowiedzi"] if o["wartosc"] == "tak"), None)
             if yes:
                 acts.append(_act(ANSWER, f"{yes['etykieta']} – pobierz ceny", broker=q["broker"], pytanie=q["id"], odpowiedz="tak"))
@@ -129,14 +130,14 @@ def _qty_vs_report(cur, questions, accounts):
             more.append(sym)
     reasons, acts = [], []
     if split:
-        reasons.append(f"W raporcie XTB jest całkowitą wielokrotność ilości z księgi ({', '.join(split)}) – podział akcji niewidoczny w historii operacji.")
+        reasons.append(f"W raporcie brokera jest całkowitą wielokrotność ilości z księgi ({', '.join(split)}) – podział akcji niewidoczny w historii operacji.")
         acts += _split_actions(questions, split)
     if fewer:
         reasons.append(f"W księdze brakuje części zakupów ({', '.join(fewer)}) – prawdopodobnie nie wczytano wszystkich plików (inne konto albo wcześniejszy okres).")
     if more:
         reasons.append(f"W księdze jest więcej papierów niż w raporcie ({', '.join(more)}) – raport jest starszy niż ostatnie operacje albo brakuje pliku ze sprzedażą.")
     if fewer or more or not acts:
-        acts.append(_act(IMPORT, "Wczytaj nowszy / brakujący eksport XTB"))
+        acts.append(_act(IMPORT, "Wczytaj nowszy / brakujący eksport"))
     return " ".join(reasons), acts
 
 
@@ -158,7 +159,7 @@ def annotate(cur, audit, questions, scope_code):
         elif name.startswith("Ilości w księdze"):
             why, acts = _qty_vs_report(cur, questions, accounts)
         elif name.startswith("Lokata") and "model" in name:
-            qs = _questions_by_prefix(questions, "tr-deposit-")
+            qs = _questions_of(questions, "lokata")
             why = "Oprocentowanie gotówki zmieniło się (wypłacone odsetki odpowiadają innej stopie niż zapisana)." if qs else \
                   "Wypłacone odsetki nie zgadzają się z modelem – np. zmiana stopy w trakcie miesiąca; pojawi się pytanie po kolejnej wypłacie."
             acts = [_act(ANSWER, q["odpowiedzi"][0]["etykieta"], broker=q["broker"], pytanie=q["id"], odpowiedz=q["odpowiedzi"][0]["wartosc"]) for q in qs]

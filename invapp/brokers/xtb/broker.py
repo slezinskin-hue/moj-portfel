@@ -151,6 +151,7 @@ def apply_specs(conn):
 class Xtb(Broker):
     code, key, name = "XTB", "xtb", "XTB"
     accept = (".xlsx",)
+    free_funds = True                                           # saldo gotowki kont XTB = wolne srodki (zakladka Gotowka)
     omi_loader = staticmethod(ensure_omi)                     # podmieniane w testach (bez pobierania z internetu)
     file_help = ("<strong>XTB</strong>: pliki <strong>.xlsx</strong> pobrane z XTB (IKE, IKZE, konto z planami i inwestycjami) – "
                  "nie zmieniaj ich nazw, numer konta jest w nazwie pliku.")
@@ -176,7 +177,7 @@ class Xtb(Broker):
         if not cur.fetchone()[0]:
             omi_note = "Specyfikacja instrumentów XTB nie została jeszcze pobrana; waluty instrumentów zagranicznych uzupełnią się automatycznie w tle."
         created = ensure_accounts(conn, pf)
-        rep = XtbImporter(conn).import_file(path)
+        rep = XtbImporter(conn).import_file(path, pf)            # ten sam odczyt pliku (arkusz czytany raz)
         rep["rules"] = rules.apply(conn)                       # jawne reguly uzytkownika (np. .PL = PLN) takze dla nowych notowan
         rep["derived"] = self.rebuild_derived(conn)
         rep["created_accounts"] = created
@@ -188,6 +189,11 @@ class Xtb(Broker):
 
     def rebuild_derived(self, conn):
         return derive.rebuild(conn, "XTB")
+
+    def relink(self, conn, report):
+        imp = XtbImporter(conn)
+        imp.link_wht(report); imp.link_sec_corrections(report); imp.group_orders(report); imp.link_transfers(report)
+        imp.classify_flows(report); imp.detect_corporate_actions(report)
 
     def pricing_steps(self, conn, provider):
         """Kroki szybkie (przed pierwszym pobraniem notowan - uzytkownik szybko widzi wartosci) i wolne (specyfikacja PDF, historia)."""
@@ -220,7 +226,7 @@ class Xtb(Broker):
             n = len((ev or {}).get("positions", []))
             k = int(k) if k == int(k) else k
             last = cutoff.date().isoformat() if cutoff else None
-            out.append({"id": f"xtb-split-{aid}", "tytul": f"Podział akcji {symbol} {k}:1?",
+            out.append({"id": f"xtb-split-{aid}", "kategoria": "split", "tytul": f"Podział akcji {symbol} {k}:1?",
                         "tresc": f"W danych XTB zamknięto {k}× więcej akcji {symbol}, niż kupiono ({n} poz.). Wygląda to na podział akcji (split) {k}:1, "
                                  f"którego XTB nie pokazał w eksporcie. Bez potwierdzenia aplikacja nie stosuje korekty, a kontrola liczb pokazuje ujemny stan. "
                                  f"Sprawdź komunikat spółki (raport ESPI/EBI) albo KDPW i podaj dzień podziału" + (f" (najpóźniej {last})." if last else "."),
@@ -315,7 +321,7 @@ class Xtb(Broker):
             n = cur.fetchone()[0]
             cur.execute("""select 1 from broker_symbol_suffix_rules r join financial_institutions f using (broker_id) where f.code='XTB' and r.symbol_suffix=%s""", (suffix,))
             if n and not cur.fetchone():
-                out.append({"id": f"xtb-currency-{suffix}", "tytul": f"Waluta instrumentów .{suffix} ({market})",
+                out.append({"id": f"xtb-currency-{suffix}", "kategoria": "waluta", "tytul": f"Waluta instrumentów .{suffix} ({market})",
                             "tresc": f"W Twoich plikach XTB jest {n} instrumentów z końcówką .{suffix}, których waluty nie podaje specyfikacja XTB. "
                                      f"Czy instrumenty .{suffix} są notowane w {ccy}? Bez tej informacji nie da się ich wycenić cenami rynkowymi "
                                      f"(aplikacja nie zgaduje waluty z końcówki symbolu).",

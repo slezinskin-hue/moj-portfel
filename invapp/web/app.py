@@ -408,11 +408,16 @@ def api_cash():
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
 
 
-async def _cash_write(request, fn):
-    """Zapis gotowki/ustawien: tylko z naglowkiem ochronnym, przez wlasciciela bazy (rola aplikacji ma tylko odczyt tych tabel)."""
+class UserError(ValueError):
+    """Blad danych wpisanych przez uzytkownika w module (komunikat po polsku, odpowiedz 422). Moduly moga dziedziczyc (np. core.cash.CashError)."""
+
+
+async def owner_write(request, fn):
+    """Wspolny zapis dla modulow (Gotowka, ustawienia, w przyszlosci PPK): tylko z naglowkiem ochronnym i z adresu lokalnego,
+    przez wlasciciela bazy (rola aplikacji ma tylko odczyt), jedna transakcja. fn(cur, body) -> wynik (slownik) albo None.
+    ValueError z komunikatem (UserError, CashError, ImportFailed) = 422 z tym komunikatem; inny blad = 500 bez szczegolow."""
     if not _same_origin(request):
         return JSONResponse({"blad": "niedozwolone zadanie"}, status_code=403)
-    from invapp.core import cash
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -420,8 +425,8 @@ async def _cash_write(request, fn):
     body = body if isinstance(body, dict) else {}
     conn = importing.owner_conn()
     try:
-        res = fn(conn.cursor(), cash, body); conn.commit()
-    except cash.CashError as e:
+        res = fn(conn.cursor(), body); conn.commit()
+    except (ValueError, ImportFailed) as e:
         conn.rollback(); return JSONResponse({"blad": str(e)}, status_code=422)
     except Exception as e:  # noqa: BLE001
         conn.rollback(); return JSONResponse({"blad": f"Nie udało się zapisać ({type(e).__name__})."}, status_code=500)
@@ -433,22 +438,26 @@ async def _cash_write(request, fn):
 
 @app.post("/api/gotowka/konto")
 async def api_cash_add(request: Request):
-    return await _cash_write(request, lambda cur, cash, b: {"id": cash.add_account(cur, b.get("nazwa"), b.get("waluta"), b.get("saldo"), b.get("na_dzien"))})
+    from invapp.core import cash
+    return await owner_write(request, lambda cur, b: {"id": cash.add_account(cur, b.get("nazwa"), b.get("waluta"), b.get("saldo"), b.get("na_dzien"))})
 
 
 @app.post("/api/gotowka/konto/{aid}/saldo")
 async def api_cash_balance(aid: int, request: Request):
-    return await _cash_write(request, lambda cur, cash, b: cash.set_balance(cur, aid, b.get("saldo"), b.get("na_dzien")))
+    from invapp.core import cash
+    return await owner_write(request, lambda cur, b: cash.set_balance(cur, aid, b.get("saldo"), b.get("na_dzien")))
 
 
 @app.post("/api/gotowka/konto/{aid}/usun")
 async def api_cash_archive(aid: int, request: Request):
-    return await _cash_write(request, lambda cur, cash, b: cash.archive(cur, aid))
+    from invapp.core import cash
+    return await owner_write(request, lambda cur, b: cash.archive(cur, aid))
 
 
 @app.post("/api/ustawienia")
 async def api_settings(request: Request):
-    return await _cash_write(request, lambda cur, cash, b: {"ustawienia": cash.set_setting(cur, str(b.get("klucz")), b.get("wartosc"))})
+    from invapp.core import cash
+    return await owner_write(request, lambda cur, b: {"ustawienia": cash.set_setting(cur, str(b.get("klucz")), b.get("wartosc"))})
 
 
 @app.post("/api/ceny/odswiez")

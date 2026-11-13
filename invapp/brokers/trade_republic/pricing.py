@@ -19,23 +19,24 @@ from invapp.pricing.service import TOL, _insert_quote
 HIST_PROVIDER = "YAHOO_1D"
 
 
-def _tr_listings(cur):
+def _tr_listings(cur, broker_code="TR"):
     cur.execute("""select l.listing_id, la.broker_symbol,
                           (select t.price from transactions t where t.listing_id = l.listing_id and t.txn_type in ('BUY','SELL') and t.price is not null
                             order by t.occurred_at desc, t.txn_id desc limit 1) as last_price_pln,
                           l.trading_currency
                    from listings l join listing_aliases la on la.listing_id = l.listing_id and la.valid_to is null
-                   where la.broker_id = (select broker_id from financial_institutions where code = 'TR')
+                   where la.broker_id = (select broker_id from financial_institutions where code = %s)
                      and exists (select 1 from derived_lots dl where dl.listing_id = l.listing_id and dl.qty_remaining > 0)
                      and not exists (select 1 from listing_provider_symbols m where m.listing_id = l.listing_id and m.provider = 'YAHOO' and m.status = 'VERIFIED')
-                   order by la.broker_symbol""")
+                   order by la.broker_symbol""", (broker_code,))
     return cur.fetchall()
 
 
-def resolve_tr_listings(conn, provider, pause=0.3):
-    """Rozwiazuje symbole dla OTWARTYCH pozycji Trade Republic (bez zweryfikowanego powiazania). Zwraca liste wynikow."""
+def resolve_tr_listings(conn, provider, pause=0.3, broker_code="TR"):
+    """Rozwiazuje symbole dla OTWARTYCH pozycji brokera, ktory podaje ISIN i ceny w PLN (Trade Republic; takze nowi brokerzy z szablonu
+    `python -m invapp.tools.nowy_broker`), bez zweryfikowanego powiazania. Zwraca liste wynikow."""
     cur = conn.cursor(); out = []
-    for listing_id, isin, ref_price, known_ccy in _tr_listings(cur):
+    for listing_id, isin, ref_price, known_ccy in _tr_listings(cur, broker_code):
         ev = {"isin": isin, "reference_price_pln": ref_price, "candidates": []}
         best, status, reason = None, "PENDING", None
         if ref_price is None:
@@ -92,3 +93,6 @@ def resolve_tr_listings(conn, provider, pause=0.3):
                 cur.execute("rollback to savepoint cur_upd")
         out.append({"isin": isin, "symbol": sym or None, "status": status, "reason": reason, "ratio": ev.get("price_ratio")})
     return out
+
+
+resolve_isin_listings = resolve_tr_listings          # nazwa ogolna dla nowych brokerow (ISIN + ceny w PLN)

@@ -9,27 +9,33 @@ invapp/
   db/
     engine.py               wbudowany PostgreSQL 16 (binarki z pakietu pgserver, serwerem zarządza pg_ctl): inicjalizacja, role, hasła, migracje
     migrate.py              migracje SQL (sumy SHA-256, numeracja ciągła)
-    migrations/0001…        schemat: księga, partie, zakresy, widoki wyceny i wyniku, lokaty
+    migrations/0001…0020    schemat: księga, partie, zakresy, widoki wyceny i wyniku, lokaty, indeksy, ustawienia, gotówka, PPK (baza)
     backup.py               kopie zapasowe (pg_dump z wbudowanego serwera)
   core/
     common.py               konwersje liczb, skróty wierszy, maskowanie danych osobowych
     derive.py               warstwa pochodna: partie i zamknięcia (XTB wg Position ID, FIFO dla brokerów bez numerów pozycji)
+    ledger_import.py        WSPÓLNY SILNIK IMPORTU: partia, duplikaty/konflikty, surowe wiersze, kontrola G3; konta, ISIN → notowanie
     deposits.py             gotówka oprocentowana jako lokata (model odsetek, stopa z wypłat, kontrola)
-    removal.py              usunięcie wczytanego pliku (stan jak bez tego pliku)
+    cash.py                 zakładka Gotówka i ustawienia (app_settings): konta bankowe, wolne środki, źródło cen i kursów
+    removal.py              usunięcie pliku / portfela / wszystkiego (stan jak bez tych plików, razem z decyzjami o usuniętych danych)
   brokers/
     base.py                 WSPÓLNY INTERFEJS brokera (rozpoznanie pliku, walidacja, import, partie, kroki cenowe, pytania do użytkownika)
     __init__.py             LISTA BROKERÓW (BROKERS) – jedyne miejsce, które trzeba dopisać przy nowym brokerze
     xtb/                    parser .xlsx, silnik importu, konta z pliku, specyfikacja OMI, reguły walut (.PL), pytania o splity
     trade_republic/         parser .csv, silnik importu, FIFO, ISIN → symbol dostawcy ze sprawdzeniem ceny, pytanie o lokatę
-  pricing/                  dostawcy (Yahoo, NBP), notowania na żywo, historia, wskaźniki (metrics), kontrola liczb (audit)
+  pricing/                  dostawcy (Yahoo, NBP), notowania na żywo (service), historia (history), wskaźniki i miary zwrotu (metrics),
+                            indeksy porównawcze (benchmarks), profile/sektory (profiles), kontrola liczb (audit) + przyczyny i rozwiązania (diagnose)
   web/
     app.py                  FastAPI: strona, API importu, cen, historii, wskaźników, kontroli, pytań, aktualizacji, zamykania
     importing.py            import z interfejsu (wybór brokera po pliku, po kolei) i zadanie cen w tle
-    dashboard.py            dane strony; zakładki = lista brokerów + WSZYSTKIE
+    dashboard.py            dane strony; zakładki = lista brokerów + WSZYSTKIE; widoki Portfel / Ekspozycja / Gotówka / Symulacje
+    export_xlsx.py          eksport do Excela
     templates/, static/     strona (HTML) + wygląd i wykresy (CSS/JS bez zewnętrznych bibliotek, działa offline)
-  tools/                    narzędzia z linii poleceń (np. potwierdzenie splitu)
+  tools/                    linia poleceń: nowy_broker (szkielet brokera), kopiuj_dane (dane do wersji testowej), potwierdzenie splitu
 instalator/                 budowanie instalatora Windows (Python embeddable + Inno Setup), ikona
-tests/                      testy publiczne (dane syntetyczne; wbudowany PostgreSQL tymczasowy)
+tests/                      testy publiczne (dane syntetyczne; wbudowany PostgreSQL tymczasowy), kontrakt brokerów, prywatność
+docs/                       ZASADY (reguły i listy kontrolne), ARCHITEKTURA, DODAWANIE_BROKERA, DODAWANIE_MODULU, PPK, ROZWOJ, INSTALATOR
+CLAUDE.md                   skrót zasad i poleceń dla pracy z kodem (także z asystentem AI)
 ```
 
 ## Zasady, których pilnuje kod
@@ -96,11 +102,19 @@ tests/                      testy publiczne (dane syntetyczne; wbudowany Postgre
 
 ## Wydajność
 
-* Specyfikacja instrumentów XTB (PDF ~35 s) jest pobierana w tle, nie w trakcie importu – import pliku XTB trwa 1–3 s.
-* Importy wgrywane jednocześnie są wykonywane po kolei.
+Pomiar 2026-11-13 (prawdziwe dane, ~1200 operacji, 3 lata historii): strony i API 40–250 ms, eksport Excela 0,5 s, zadanie cen w tle ~5 s.
+
+* **Import**: istniejące operacje sprawdzane jednym zapytaniem na plik (prefetch kluczy), nowe operacje XTB zapisywane wsadowo,
+  „widziano w tym pliku” zbiorczo, konta i waluty w pamięci podręcznej importu, arkusz Excela czytany raz. Wynik: ok. 5× mniej zapytań;
+  ponowny import pliku z 1118 operacjami ~2× szybszy, pierwszy ~1,3× (pozostały czas: odczyt Excela i łączenie operacji).
+  Specyfikacja instrumentów XTB (PDF ~35 s) jest pobierana w tle, nie w trakcie importu. Importy wgrywane jednocześnie – po kolei.
+* **Notowania i kursy** są dopisywane co minutę otwartej aplikacji i nigdy kasowane (audyt). Wycena czyta „najnowsze” z tabel wskazań
+  `market_quote_latest` / `fx_quote_latest` (utrzymuje je baza wyzwalaczem, migracja 0020) – czas nie rośnie z historią notowań.
+* **Indeksy** na kolumnach wyszukiwania (instrument, konto, plik, pozycja, wiersz surowy) – migracja 0020; nowa kolumna wyszukiwania = indeks w tej samej migracji.
 * Ceny: zapytania do Yahoo równolegle (6 naraz), zweryfikowane symbole nie są sprawdzane ponownie przez 7 dni, historia cen dopełniana
-  przyrostowo. Kolejność: najpierw notowania (wartości widoczne po kilku sekundach), potem specyfikacje i historia.
-* Baza: serwerem zarządza aplikacja (`db/engine.py`), dziennik serwera poza katalogiem danych – po nieczystym zamknięciu start nie zawiesza się.
+  przyrostowo; najpierw notowania (wartości po kilku sekundach), potem specyfikacje i historia.
+* Baza: serwerem zarządza aplikacja (`db/engine.py`), dziennik serwera poza katalogiem danych – po nieczystym zamknięciu start nie zawiesza się;
+  zamknięcie serwera czeka najwyżej 10 s na otwarte połączenia przeglądarki.
 * Strona: dane wczytywane równolegle, najpierw zapisane ceny, potem świeże; po zakończeniu kroku w tle strona odświeża dane bez przeładowania.
 
 ## Baza danych

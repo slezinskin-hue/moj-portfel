@@ -566,7 +566,7 @@
         };
       };
     });
-    const rows = (c.wolne_xtb || []).map(w => `<tr><td>${esc(w.konto)}</td><td>XTB · wolne środki</td><td class="n">${zl(w.saldo)}</td><td class="muted">saldo gotówki z eksportu (wpłaty, zakupy, sprzedaże, dywidendy, podatki, opłaty)</td></tr>`)
+    const rows = (c.wolne_xtb || []).map(w => `<tr><td>${esc(w.konto)}</td><td>${esc(w.broker || 'broker')} · wolne środki</td><td class="n">${zl(w.saldo)}</td><td class="muted">saldo gotówki z eksportu (wpłaty, zakupy, sprzedaże, dywidendy, podatki, opłaty)</td></tr>`)
       .concat((c.lokaty || []).map(d => `<tr><td>${esc(d.account)}</td><td>${esc(d.broker)} · lokata ${(d.rate * 100).toLocaleString('pl-PL', {maximumFractionDigits: 2})}%</td><td class="n">${zl(d.value)}</td><td class="muted">saldo z eksportu na ${esc(d.ledger_as_of)} · zawsze w wartości portfela</td></tr>`));
     $('#cash-brk tbody').innerHTML = rows.join('') || '<tr><td colspan="4" class="muted">Brak danych.</td></tr>';
   }

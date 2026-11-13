@@ -14,6 +14,15 @@ def _dec(x):
     return D(str(x)) if x is not None else D(0)
 
 
+def _brokers():
+    from invapp import brokers
+    return brokers.BROKERS
+
+
+def _names():
+    return " + ".join(b.name for b in _brokers())
+
+
 def _settings(cur):
     """Ustawienia wyceny (migracja 0017); baza bez tabeli ustawien -> domyslne (Yahoo, kurs na zywo)."""
     from invapp.core import cash
@@ -112,28 +121,29 @@ def run(conn, scope_code, brokers=("XTB", "TR")):
         abs(_dec(s["investment_gain"]) + _dec(s["additional_income"]) - _dec(s["total_result"])) <= TOL,
         f"{_dec(s['investment_gain']).quantize(TOL)} + {_dec(s['additional_income']).quantize(TOL)} = {_dec(s['total_result']).quantize(TOL)}")
 
-    # 3. zakres laczny = suma brokerow
+    # 3. zakres laczny = suma brokerow (wszystkich z rejestru invapp/brokers)
     if scope_code == "INVESTMENT_ALL":
-        cur.execute("select * from v_scope_summary where scope_code in ('BROKER:XTB','BROKER:TR')")
+        cur.execute("select * from v_scope_summary where scope_code = any(%s)", ([b.scope_code for b in _brokers()],))
         cols2 = [d[0] for d in cur.description]
         parts = [dict(zip(cols2, r)) for r in cur.fetchall()]
         for k, label in (("securities_value", "wartość papierów"), ("investment_gain", "zysk z inwestycji"), ("additional_income", "dochody dodatkowe"), ("total_result", "zysk całkowity")):
             total = sum((_dec(p[k]) for p in parts), D(0))
-            add(f"WSZYSTKIE = XTB + Trade Republic: {label}", abs(total - _dec(s[k])) <= TOL, f"{total.quantize(TOL)} vs {_dec(s[k]).quantize(TOL)}")
+            add(f"WSZYSTKIE = {_names()}: {label}", abs(total - _dec(s[k])) <= TOL, f"{total.quantize(TOL)} vs {_dec(s[k]).quantize(TOL)}")
 
     # 3a. lokaty (gotowka oprocentowana; core/deposits.py)
     deps = _deposit_checks(cur, scope_code, accounts, add)
 
-    # 4. ilosci wzgledem raportu XTB (stan na dzien eksportu)
-    if "XTB" in brokers:
+    # 4. ilosci wzgledem raportu brokera (stan na dzien eksportu) - dla kont, ktorych eksport zawiera stan pozycji (np. XTB)
+    cur.execute("select exists (select 1 from broker_position_snapshots where account_id = any(%s))", (accounts,))
+    if cur.fetchone()[0]:
         cur.execute("""select a.display_name, l.display_name, coalesce(dl.qty, 0), sn.vol, sn.as_of
                        from (select s.account_id, s.listing_id, s.volume vol, s.as_of from broker_position_snapshots s join
                                (select account_id, max(as_of) mx from broker_position_snapshots where row_level = 'INSTRUMENT' group by 1) m on m.account_id = s.account_id and m.mx = s.as_of
                              where s.row_level = 'INSTRUMENT' and s.account_id = any(%s)) sn
                        join accounts a on a.account_id = sn.account_id join listings l on l.listing_id = sn.listing_id
                        left join (select account_id, listing_id, sum(qty_remaining) qty from derived_lots group by 1, 2) dl on dl.account_id = sn.account_id and dl.listing_id = sn.listing_id""", (accounts,))
-        diffs = [f"{a} / {i}: księga {q}, raport XTB {v}" for a, i, q, v, _ in cur.fetchall() if abs(_dec(q) - _dec(v)) > D("0.0002")]
-        add("Ilości w księdze = ilości w raporcie XTB (stan na dzień eksportu)", not diffs, "; ".join(diffs), "OSTRZEZENIE")
+        diffs = [f"{a} / {i}: księga {q}, raport brokera {v}" for a, i, q, v, _ in cur.fetchall() if abs(_dec(q) - _dec(v)) > D("0.0002")]
+        add("Ilości w księdze = ilości w raporcie brokera (stan na dzień eksportu)", not diffs, "; ".join(diffs), "OSTRZEZENIE")
     # 5. ujemne stany (zakupy po potwierdzonych korektach - sprzedaze)
     cur.execute("""select count(*) from (select account_id, listing_id, sum(qty_initial) b from derived_lots where account_id = any(%s) group by 1, 2) x
                    left join (select account_id, listing_id, sum(quantity) s from transactions where txn_type = 'SELL' and status = 'ACTIVE' group by 1, 2) y using (account_id, listing_id)
@@ -183,6 +193,6 @@ def _deposit_checks(cur, scope_code, accounts, add):
         add(f"Lokata „{name}”: papiery + lokata − wpłaty netto z banku = zysk z inwestycji + dochody", abs(lhs - rhs) <= TOL,
             f"{lhs.quantize(TOL)} vs {rhs.quantize(TOL)} (wpłaty netto {net_ext.quantize(TOL)}, lokata {_dec(m['value']).quantize(TOL)})")
     if scope_code == "INVESTMENT_ALL":
-        parts = sum((dep.scope_deposits(cur, c)["value"] for c in ("BROKER:XTB", "BROKER:TR")), D(0))
-        add("WSZYSTKIE = XTB + Trade Republic: lokaty", abs(parts - sd["value"]) <= TOL, f"{parts.quantize(TOL)} vs {_dec(sd['value']).quantize(TOL)}")
+        parts = sum((dep.scope_deposits(cur, b.scope_code)["value"] for b in _brokers()), D(0))
+        add(f"WSZYSTKIE = {_names()}: lokaty", abs(parts - sd["value"]) <= TOL, f"{parts.quantize(TOL)} vs {_dec(sd['value']).quantize(TOL)}")
     return sd["value"]
