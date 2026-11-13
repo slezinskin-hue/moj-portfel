@@ -8,8 +8,10 @@
   const esc = s => String(s === null || s === undefined ? '' : s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
   const nf2 = new Intl.NumberFormat('pl-PL', {minimumFractionDigits: 2, maximumFractionDigits: 2});
   const nf0 = new Intl.NumberFormat('pl-PL', {maximumFractionDigits: 0});
-  const zl = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf2.format(v) + ' zł';
-  const zl0 = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf0.format(v) + ' zł';
+  // waluta prezentacji (ustawienie ⚙; serwer zwraca kwoty juz przeliczone - docs/WALUTA.md)
+  const CUR = BOOT.waluta || 'PLN', SYM = BOOT.sym || 'zł';
+  const zl = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf2.format(v) + ' ' + SYM;
+  const zl0 = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf0.format(v) + ' ' + SYM;
   const sgn = v => (v > 0 ? '+' : '');
   const zlS = v => (v === null || v === undefined) ? '—' : sgn(v) + zl(v);
   const pct = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : sgn(v) + (v * 100).toLocaleString('pl-PL', {minimumFractionDigits: d === undefined ? 2 : d, maximumFractionDigits: d === undefined ? 2 : d}) + '%';
@@ -34,14 +36,15 @@
   };
 
   // ---------------------------------------------------------------- stan danych
-  const S = {live: null, hist: null, met: null, inc: null, audit: null, version: null, alloc: 'pos', mode: 'value', range: 'ALL', sort: ['value', -1], q: '', incAll: false};
+  const S = {live: null, hist: null, met: null, inc: null, audit: null, version: null, mode: 'value', range: 'ALL', sort: ['value', -1], q: '', incAll: false,
+             closed: null, posKind: 'open', open: new Set(), pcharts: {}};
 
   // ---------------------------------------------------------------- KPI i pozycje
   async function loadLive(opts) {
     opts = opts || {};
     try {
       const d = await getJSON('/api/zywo?scope=' + SCOPE + (opts.force ? '&force=true' : '') + (opts.fast ? '&fast=true' : ''));
-      S.live = d; renderKpis(); renderPositions(); renderAlloc(); renderDeposits();
+      S.live = d; renderKpis(); renderPositions(); renderAlloc(); renderDeposits(); renderIncTiles();
       if (viewOf() === 'symulacje') window.renderSim();
     } catch (e) { $('#price-note').innerHTML = '<span class="warn">Nie udało się pobrać wartości (brak połączenia z bazą lub internetem).</span>'; }
   }
@@ -57,83 +60,147 @@
     $('#k-day').innerHTML = m && m.day_change !== null ? `<span class="chip">${zlS(m.day_change)} (${pct(m.day_change_pct)}) od ${m.day_change_from.slice(8, 10)}.${m.day_change_from.slice(5, 7)}</span>` : '';
     $('#k-total').innerHTML = `<span class="${cls(total)}">${zlS(total)}</span>`;
     $('#k-total-s').innerHTML = (base > 0 ? `<span class="chip ${cls(total)}">${pct(total / base)}</span> od wpłaconych ` + zl0(base) : '') ;
-    $('#k-inv').innerHTML = `<span class="${cls(s.investment_gain)}">${zlS(s.investment_gain)}</span>`;
-    $('#k-inv-s').textContent = 'niezrealizowany ' + zlS(s.unrealized_gain) + ' · zrealizowany ' + zlS(s.realized_gain);
-    const inc = s.additional_income;
-    $('#k-inc').innerHTML = `<span class="${cls(inc)}">${zlS(inc)}</span>`;
-    $('#k-inc-s').textContent = 'dywidendy ' + zl(s.dividends_net) + ' · odsetki ' + zl(s.interest_net) + (s.rewards ? ' · nagrody ' + zl(s.rewards) : '') + (s.fees ? ' · opłaty ' + zl(s.fees) : '');
+    // rozbicie zysku (te same skladniki co w podsumowaniu zakresu; suma = zysk calkowity - kontrola liczb)
+    const row = (l, v, c) => `<div class="r ${c || ''}"><span>${l}</span><b class="${cls(v)}">${zlS(v)}</b></div>`;
+    $('#k-gain-break').innerHTML = row('Zysk z inwestycji', s.investment_gain) + row('zmiana wartości otwartych pozycji', s.unrealized_gain, 'sub') + row('zrealizowany ze sprzedaży', s.realized_gain, 'sub') +
+      row('Dywidendy netto', s.dividends_net) + row('Odsetki netto', s.interest_net) + (+s.rewards ? row('Nagrody', s.rewards) : '') + (+s.fees ? row('Opłaty', s.fees) : '') + row('Zysk całkowity', total, 't');
+    const i12 = s.income_12m;
+    if (i12) {
+      $('#k-inc').innerHTML = `<span class="${cls(i12.total)}">${zlS(i12.total)}</span>`;
+      $('#k-inc-s').textContent = 'dywidendy ' + zl(i12.dividends) + ' · odsetki ' + zl(i12.interest) + (+i12.rewards ? ' · nagrody ' + zl(i12.rewards) : '');
+    }
     const missing = (s.snapshot_positions || 0) + (s.missing_positions || 0);
     const xtbMode = s.settings && s.settings.price_source === 'XTB_EXPORT', nbp = s.settings && s.settings.fx_source === 'NBP';
     $('#price-note').innerHTML = (s.positions ? (xtbMode ? 'Ceny XTB z ostatniego eksportu (ustawienie ⚙), pozostałe z Yahoo: ' : 'Ceny z Yahoo Finance: ') + when(s.oldest_quote) + (s.oldest_quote !== s.newest_quote ? ' – ' + when(s.newest_quote) : '') + (nbp ? ' · kursy walut: średnie NBP' : ' · kursy walut na żywo') + ' · odświeżanie co minutę' : 'Brak otwartych pozycji') +
-      (missing ? ` · <span class="warn">${missing} poz. bez ceny rynkowej (pobieram w tle)</span>` : '');
+      (missing ? ` · <span class="warn">${missing} poz. bez ceny rynkowej (pobieram w tle)</span>` : '') +
+      (CUR !== 'PLN' ? `<br>Kwoty w <b>${CUR}</b>: wartość po kursie teraz ${S.live.kurs ? num(S.live.kurs, 4) + ' zł' : '<span class="warn">brak kursu</span>'}, każdy zakup, sprzedaż i dochód po kursie z jego dnia (ustawienie ⚙)` +
+        (S.live.brak_kursu ? ' · <span class="warn">brak kursu z części dni – część kwot niepełna</span>' : '') : '');
   }
+  $('#k-gain-more').onclick = () => { const b = $('#k-gain-break'), open = b.hidden; b.hidden = !open; $('#k-gain-more').textContent = open ? 'Ukryj rozbicie ▴' : 'Rozbicie zysku ▾'; $('#k-gain-more').setAttribute('aria-expanded', open); };
   function posRows() {
     const p = (S.live && S.live.positions) || [], tot = p.reduce((a, x) => a + (x.value || 0), 0);
     return p.map(x => Object.assign({}, x, {share: tot && x.value !== null ? x.value / tot : null, gain: x.value !== null && x.cost_left !== null ? x.value - x.cost_left : null,
       gainp: x.cost_left > 0 && x.value !== null ? (x.value - x.cost_left) / x.cost_left : null, acct: [...new Set((x.accounts || []).map(a => a.broker === 'TR' ? 'TR' : (PRODUCT[a.product_type] || a.product_type)))].join(', ')}));
   }
+  const acctLabel = a => a.broker === 'TR' ? 'TR' : (PRODUCT[a.product_type] || a.product_type);
+  const ddmm = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) : '';
   function renderPositions() {
     const tb = $('#pos tbody'); if (!S.live) return;
     let rows = posRows(); const q = S.q.trim().toLowerCase();
+    $('#pos-n-open').textContent = '(' + rows.length + ')';
+    if (S.live.day_ref) $('#th-day').title = `Zmiana od zamknięcia z ${ddmm(S.live.day_ref)}: obecna ilość × (cena teraz − cena zamknięcia), w ${CUR} z kursem walut. W dni bez sesji – tylko zmiana kursu walut.`;
     if (q) rows = rows.filter(r => (r.ticker + ' ' + r.instrument + ' ' + r.acct).toLowerCase().includes(q));
     const [k, dir] = S.sort;
     rows.sort((a, b) => { const x = a[k], y = b[k]; if (x === null || x === undefined) return 1; if (y === null || y === undefined) return -1; return (typeof x === 'string' ? x.localeCompare(y, 'pl') : x - y) * dir; });
     $$('#pos th.sort').forEach(th => { th.classList.toggle('on', th.dataset.k === k); th.classList.toggle('asc', th.dataset.k === k && dir > 0); });
     const maxShare = Math.max(...rows.map(r => r.share || 0), 0.0001);
-    tb.innerHTML = rows.map((r, i) => {
-      const xtb = r.price_source === 'XTB_EXPORT', market = r.price_source === 'MARKET' || xtb, unit = r.price_unit === 'MINOR_1_100' ? ' (pensy)' : '';
-      return `<tr data-i="${i}" style="cursor:pointer"><td><span class="tick">${esc(r.ticker)}</span><span class="inst">${esc(r.instrument)}</span></td>
+    tb.innerHTML = rows.map(r => {
+      const id = r.listing_id, xtb = r.price_source === 'XTB_EXPORT', market = r.price_source === 'MARKET' || xtb, unit = r.price_unit === 'MINOR_1_100' ? ' (pensy)' : '', open = S.open.has(id);
+      const day = r.day_change === null || r.day_change === undefined ? '<span class="muted">—</span>' : `<span class="${cls(r.day_change)}">${zlS(r.day_change)}<span class="pp">${pct(r.day_change_pct)}</span></span>`;
+      return `<tr data-id="${id}" style="cursor:pointer"><td><span class="tick">${esc(r.ticker)}</span><span class="inst">${esc(r.instrument)}</span></td>
         <td>${(r.acct || '').split(', ').filter(Boolean).map(a => `<span class="badge">${esc(a)}</span>`).join(' ')}</td>
         <td class="n">${num(r.qty)}</td><td class="n">${market && r.price_pln !== null ? zl(r.price_pln) : '<span class="warn">brak ceny</span>'}</td>
-        <td class="n"><b>${r.value === null ? '—' : zl(r.value)}</b></td>
+        <td class="n">${r.avg_cost === null || r.avg_cost === undefined ? '—' : zl(r.avg_cost)}</td>
+        <td class="n"><b>${r.value === null ? '—' : zl(r.value)}</b></td><td class="n">${day}</td>
         <td class="n">${r.share === null ? '—' : pct(r.share, 1).replace('+', '')}<span class="bar"><i style="width:${(r.share || 0) / maxShare * 100}%"></i></span></td>
         <td class="n">${zl(r.cost_left)}</td><td class="n ${cls(r.gain)}">${zlS(r.gain)}</td><td class="n ${cls(r.gainp)}">${pct(r.gainp, 1)}</td></tr>
-        <tr class="sub" data-sub="${i}" style="display:none"><td colspan="9">
+        <tr class="sub" data-sub="${id}" style="${open ? '' : 'display:none'}"><td colspan="11">
           ${xtb ? `Wycena z ostatniego eksportu XTB (cena i kurs XTB${r.fx_used ? ' ' + num(r.fx_used, 4) : ''}) z ${when(r.price_time)} – ustawienie „ceny z eksportu XTB”. Po nowym zakupie lub sprzedaży (inna ilość niż w eksporcie) pozycja wraca do ceny z Yahoo.` :
             market ? `Cena na giełdzie: <b>${num(r.price, 4)} ${esc(r.currency)}${unit}</b> × ilość = ${num(r.value_native, 2)} ${esc(r.currency)}` + (r.currency !== 'PLN' ? ` · kurs ${esc(r.currency)}/PLN <b>${num(r.fx_used, 4)}</b> (${r.fx_source === 'NBP_A' ? 'NBP' : 'Yahoo'})` : '') + ` · cena z ${when(r.price_time)}${r.market_state ? ' (' + esc(r.market_state) + ')' : ''}` : '<span class="warn">Brak ceny rynkowej z API – wartość niepewna (cena z raportu brokera albo brak).</span>'}
+          ${r.prev_price_pln !== null && r.prev_price_pln !== undefined ? `<br>Dziś: cena w ${CUR} ${zl(r.price_pln)} wobec ${zl(r.prev_price_pln)} na zamknięciu ${esc(r.prev_date)} (z kursem dnia) × ${num(r.qty)} szt. = <b class="${cls(r.day_change)}">${zlS(r.day_change)}</b>` : ''}
+          ${r.avg_cost !== null && r.avg_cost !== undefined ? `<br>Średni koszt: ${zl(r.cost_left)} / ${num(r.qty)} szt. = <b>${zl(r.avg_cost)}</b> za sztukę (z prowizjami, po kursie z dnia zakupu)` : ''}
           ${(r.accounts || []).length > 1 ? '<br>Na kontach: ' + r.accounts.map(a => esc(a.account) + ' ' + num(a.qty) + ' szt. (' + zl(a.value) + ')').join(' · ') : ''}
+          <div class="pos-chart" data-chart="${id}"></div>
         </td></tr>`;
-    }).join('') || '<tr><td colspan="9" class="muted">Brak otwartych pozycji.</td></tr>';
+    }).join('') || '<tr><td colspan="11" class="muted">Brak otwartych pozycji.</td></tr>';
     const deps = (S.live.deposits || []);
     $('#pos tfoot').innerHTML = deps.map(d => `<tr><td><span class="tick">Lokata</span><span class="inst">${esc(d.account)} – gotówka ${(d.rate * 100).toLocaleString('pl-PL', {maximumFractionDigits: 2})}% rocznie, saldo z ${esc(d.ledger_as_of)}</span></td><td><span class="badge">${esc(d.broker)}</span></td>
-       <td class="n">—</td><td class="n">—</td><td class="n"><b>${zl(d.value)}</b></td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>`).join('');
-    tb.querySelectorAll('tr[data-i]').forEach(tr => tr.onclick = () => { const s = tb.querySelector(`tr[data-sub="${tr.dataset.i}"]`); s.style.display = s.style.display === 'none' ? '' : 'none'; });
+       <td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n"><b>${zl(d.value)}</b></td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>`).join('');
+    tb.querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => {
+      const id = +tr.dataset.id, s = tb.querySelector(`tr[data-sub="${id}"]`), show = s.style.display === 'none';
+      s.style.display = show ? '' : 'none';
+      if (show) { S.open.add(id); posChart(id); } else S.open.delete(id);
+    });
+    S.open.forEach(id => { if (tb.querySelector(`tr[data-sub="${id}"]`)) posChart(id); });
   }
   $$('#pos th.sort').forEach(th => th.onclick = () => { const k = th.dataset.k; S.sort = [k, S.sort[0] === k ? -S.sort[1] : (th.classList.contains('n') ? -1 : 1)]; renderPositions(); });
-  $('#pos-q').oninput = e => { S.q = e.target.value; renderPositions(); };
+  $('#pos-q').oninput = e => { S.q = e.target.value; renderPositions(); renderClosed(); };
 
+  // wykres ceny pozycji (zamkniecia dzienne w walucie notowania) z zaznaczonymi zakupami i sprzedazami; dane raz na otwarcie strony
+  async function posChart(id) {
+    const slot = document.querySelector(`.pos-chart[data-chart="${id}"]`); if (!slot) return;
+    const keep = S.pcharts[id];
+    if (keep && keep.box) { if (keep.box.parentNode !== slot) { slot.innerHTML = ''; slot.appendChild(keep.box); } return; }
+    if (keep && keep.loading) return;
+    S.pcharts[id] = {loading: true}; slot.innerHTML = '<span class="muted">Ładowanie wykresu…</span>';
+    let d; try { d = await getJSON(`/api/pozycja?scope=${SCOPE}&listing=${id}`); } catch (e) { delete S.pcharts[id]; slot.innerHTML = '<span class="warn">Nie udało się wczytać wykresu.</span>'; return; }
+    const box = document.createElement('div'), ccy = d.waluta || '', cur = document.querySelector(`.pos-chart[data-chart="${id}"]`) || slot;
+    if (!d.ceny.length) { box.innerHTML = '<span class="muted">Brak historii cen tego instrumentu (Yahoo).</span>'; S.pcharts[id] = {box}; cur.innerHTML = ''; cur.appendChild(box); return; }
+    const pts = d.ceny.map(([t, c]) => ({t: new Date(t + 'T00:00:00').getTime(), date: t, close: +c}));
+    const at = t => { let lo = 0, hi = pts.length - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m].t <= t) lo = m; else hi = m; } return pts[hi].t <= t ? pts[hi] : pts[lo]; };
+    const byDay = {};
+    d.transakcje.forEach(x => (byDay[x.data] = byDay[x.data] || []).push(x));
+    const markers = d.transakcje.map(x => { const t = new Date(x.data + 'T00:00:00').getTime(), p = at(t); return {t, v: p.close, kind: x.typ === 'SELL' ? 'sell' : 'buy'}; });
+    const tip = (p, series, chart) => {
+      let h = `<b>${Charts.fmtDate(p.t)}</b><div class="r"><span>Zamknięcie</span><b>${num(p.close, 4)} ${esc(ccy)}</b></div>`;
+      (byDay[p.date] || []).forEach(x => { h += `<div class="r"><span><span class="mk ${x.typ === 'SELL' ? 'sell' : 'buy'}"></span>${x.typ === 'SELL' ? 'Sprzedaż' : 'Kupno'} ${num(x.ilosc)} szt.</span><b>${x.cena === null ? '' : num(x.cena, 4) + ' ' + esc(x.waluta_ceny || '')}</b></div><div class="r muted"><span>${esc(x.konto)}</span><span>${x.kwota === null ? '—' : zlS(+x.kwota)}</span></div>`; });
+      return h;
+    };
+    box.innerHTML = '<div></div>';
+    const n = d.transakcje.length, nb = d.transakcje.filter(x => x.typ !== 'SELL').length;
+    const leg = document.createElement('div'); leg.className = 'legend';
+    leg.innerHTML = `<span><span class="sw" style="background:var(--c1)"></span>Cena zamknięcia (${esc(ccy)}, skorygowana o splity)</span><span><span class="mk buy"></span>kupno (${nb})</span><span><span class="mk sell"></span>sprzedaż (${n - nb})</span><span class="muted">najedź na znacznik: ilość, cena i kwota z eksportu</span>`;
+    box.appendChild(leg);
+    S.pcharts[id] = {box};
+    cur.innerHTML = ''; cur.appendChild(box);
+    const ch = new Charts.TimeChart(box.firstChild, {height: 230, navigator: false, minSpan: 14 * Charts.DAY, fmtY: v => num(v, v < 10 ? 2 : 0), fmtTip: tip,
+      series: [{key: 'close', label: 'Cena', color: 'var(--c1)', area: true, width: 1.8}], markers});
+    ch.setData(pts);
+    S.pcharts[id].chart = ch;
+  }
+
+  // zamkniete pozycje (sprzedaze z zyskiem zrealizowanym) - ladowane raz (nie zaleza od cen)
+  async function loadClosed() {
+    try { S.closed = await getJSON('/api/zamkniete?scope=' + SCOPE); renderClosed(); } catch (e) { $('#closed tbody').innerHTML = '<tr><td colspan="10" class="warn">Nie udało się wczytać zamkniętych pozycji.</td></tr>'; }
+  }
+  function renderClosed() {
+    if (!S.closed) return;
+    const all = S.closed.pozycje || [], q = S.q.trim().toLowerCase();
+    $('#pos-n-closed').textContent = '(' + all.length + ')';
+    const rows = q ? all.filter(r => ((r.ticker || '') + ' ' + r.instrument + ' ' + r.accounts.map(acctLabel).join(' ')).toLowerCase().includes(q)) : all;
+    $('#closed tbody').innerHTML = rows.map(r => `<tr><td><span class="tick">${esc(r.ticker || '')}</span><span class="inst">${esc(r.instrument)}</span></td>
+      <td>${[...new Set(r.accounts.map(acctLabel))].map(a => `<span class="badge">${esc(a)}</span>`).join(' ')}</td><td>${esc(r.first_buy)}</td><td>${esc(r.last_sell)}</td>
+      <td class="n">${num(r.qty_sold)}</td><td class="n">${zl(r.cost)}</td><td class="n">${zl(r.proceeds)}</td><td class="n ${cls(r.realized)}"><b>${zlS(r.realized)}</b></td><td class="n ${cls(r.realized_pct)}">${pct(r.realized_pct, 1)}</td>
+      <td>${r.closed ? '<span class="badge">zamknięta</span>' : `<span class="badge warn" title="Część pozycji nadal jest w portfelu">częściowo · ${num(r.qty_open)} szt. w portfelu</span>`}</td></tr>`).join('') ||
+      '<tr><td colspan="10" class="muted">Brak sprzedaży w tym portfelu.</td></tr>';
+    const sum = all.reduce((a, r) => a + +r.realized, 0);
+    $('#closed tfoot').innerHTML = all.length ? `<tr><td colspan="7"><b>Razem zysk zrealizowany</b> <span class="muted">(${all.length} instr.)</span></td><td class="n ${cls(sum)}"><b>${zlS(sum)}</b></td><td colspan="2" class="muted">${Math.abs(sum - +S.closed.zysk_zrealizowany) <= 0.01 ? '= kafelek „Zysk” (zrealizowany)' : '<span class="warn">≠ ' + zl(+S.closed.zysk_zrealizowany) + '</span>'}</td></tr>` : '';
+  }
+  $$('#pos-kind button').forEach(b => b.onclick = () => {
+    S.posKind = b.dataset.k; $$('#pos-kind button').forEach(x => x.classList.toggle('on', x === b));
+    $('#pos-open').hidden = S.posKind !== 'open'; $('#pos-closed').hidden = S.posKind !== 'closed';
+    $('#pos-hint').textContent = S.posKind === 'open' ? `ilość × cena z Yahoo × kurs, w ${CUR} · kliknij wiersz: szczegóły i wykres ceny` : 'sprzedane papiery: zysk zrealizowany na każdym instrumencie';
+  });
+
+  // alokacja calej wartosci (papiery, lokaty, gotowka) - zakladka Ekspozycja
   function renderAlloc() {
-    if (!S.live) return;
-    const rows = posRows().filter(r => r.value > 0), deps = S.live.deposits || [];
-    let items = [];
-    if (S.alloc === 'pos') {
-      rows.sort((a, b) => b.value - a.value);
-      items = rows.slice(0, 9).map(r => ({label: r.ticker, value: r.value}));
-      const rest = rows.slice(9).reduce((a, r) => a + r.value, 0); if (rest > 0) items.push({label: 'pozostałe (' + (rows.length - 9) + ')', value: rest});
-      deps.forEach(d => items.push({label: 'Lokata ' + d.broker, value: d.value}));
-    } else {
+    if (!S.live || viewOf() !== 'ekspozycja') return;
+    const rows = posRows().filter(r => r.value > 0), deps = S.live.deposits || [], sc = S.live.scope || {};
+    const build = kind => {
       const g = {}, add = (k, v) => { g[k] = (g[k] || 0) + v; };
       rows.forEach(r => (r.accounts || []).forEach(a => {
         if (!a.value) return;
-        if (S.alloc === 'acct') add(a.broker === 'TR' ? 'Trade Republic' : (a.product_type === 'IKE' ? 'IKE' : a.product_type === 'IKZE' ? 'IKZE' : 'XTB zwykłe'), a.value);
-        else if (S.alloc === 'broker') add(a.broker === 'TR' ? 'Trade Republic' : a.broker, a.value);
-        else add(r.currency || '?', a.value);
+        if (kind === 'acct') add(a.broker === 'TR' ? 'Trade Republic' : (a.product_type === 'IKE' ? 'IKE' : a.product_type === 'IKZE' ? 'IKZE' : 'XTB zwykłe'), a.value);
+        else add(a.broker === 'TR' ? 'Trade Republic' : a.broker, a.value);
       }));
-      deps.forEach(d => add(S.alloc === 'acct' ? 'Lokaty' : S.alloc === 'broker' ? (d.broker === 'TR' ? 'Trade Republic' : d.broker) : 'PLN', d.value));
-      const sc = S.live.scope || {};
-      if (+sc.cash_value) add(S.alloc === 'acct' ? 'Gotówka (banki)' : S.alloc === 'broker' ? 'Banki' : 'gotówka', +sc.cash_value);
-      if (+sc.xtb_free_value) add(S.alloc === 'acct' ? 'Wolne środki XTB' : S.alloc === 'broker' ? 'XTB' : 'PLN', +sc.xtb_free_value);
-      items = Object.entries(g).map(([label, value]) => ({label, value})).sort((a, b) => b.value - a.value);
-    }
-    if (S.alloc === 'pos') {
-      const sc = S.live.scope || {};
-      if (+sc.cash_value) items.push({label: 'Gotówka (banki)', value: +sc.cash_value});
-      if (+sc.xtb_free_value) items.push({label: 'Wolne środki XTB', value: +sc.xtb_free_value});
-    }
-    items.forEach((it, i) => it.color = PAL[i % PAL.length]);
-    Charts.donut($('#alloc'), items, {fmt: zl, centerLabel: 'Wartość'});
+      deps.forEach(d => add(kind === 'acct' ? 'Lokaty' : (d.broker === 'TR' ? 'Trade Republic' : d.broker), d.value));
+      if (+sc.cash_value) add(kind === 'acct' ? 'Gotówka (banki)' : 'Banki', +sc.cash_value);
+      if (+sc.xtb_free_value) add(kind === 'acct' ? 'Wolne środki XTB' : 'XTB', +sc.xtb_free_value);
+      return Object.entries(g).map(([label, value]) => ({label, value})).sort((a, b) => b.value - a.value).map((it, i) => Object.assign(it, {color: PAL[i % PAL.length]}));
+    };
+    Charts.donut($('#alloc-acct'), build('acct'), {fmt: zl, centerLabel: 'Wartość', size: 190});
+    Charts.donut($('#alloc-broker'), build('broker'), {fmt: zl, centerLabel: 'Wartość', size: 190});
   }
-  $$('#alloc-seg button').forEach(b => b.onclick = () => { S.alloc = b.dataset.k; $$('#alloc-seg button').forEach(x => x.classList.toggle('on', x === b)); renderAlloc(); });
 
   function renderDeposits() {
     const deps = (S.live && S.live.deposits) || [], box = $('#deps');
@@ -146,7 +213,7 @@
   }
 
   // ---------------------------------------------------------------- wykres glowny i wskazniki
-  let main = null, under = null;
+  let main = null;
   const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* brak pamieci przegladarki */ } };
   const stored = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return Array.isArray(v) ? v : d; } catch (e) { return d; } };
   // wykres "Zwrot %": miary do wyboru (kilka naraz) i indeksy do porownania
@@ -207,22 +274,28 @@
   function buildMain() {
     if (!main) {
       main = new Charts.TimeChart($('#chart'), {height: 380, series: MODES[S.mode].series(), fmtY: MODES[S.mode].fmt, fmtTip: tipMain});
-      main.onWindow = (a, b) => { if (under) under.setWindow(a, b, true); $('#zoom-reset').style.display = main.isZoomed() ? 'inline' : 'none'; $$('#range button').forEach(x => x.classList.remove('on')); };
+      main.onWindow = (a, b) => { $('#zoom-reset').style.display = main.isZoomed() ? 'inline' : 'none'; $$('#range button').forEach(x => x.classList.remove('on')); };
     }
     main.o.series = MODES[S.mode].series(); main.o.fmtY = MODES[S.mode].fmt; main.o.includeZero = S.mode === 'twr';
     const pts = mainPoints(); main.setData(pts, true); renderLegend(); renderPctTools();
-    if (!under && S.met && S.met.index_series) {
-      under = new Charts.TimeChart($('#under'), {height: 150, navigator: false, series: [{key: 'dd', label: 'Obsunięcie od szczytu', color: 'var(--neg)', area: true}], fmtY: v => pct(v, 0)});
-      under.onWindow = (a, b) => main.setWindow(a, b);
-    }
-    if (under && S.met && S.met.index_series) under.setData(S.met.index_series.map(([d, i, dd]) => ({t: new Date(d + 'T00:00:00').getTime(), dd})), true);
     applyRange(S.range, true);
+    renderIdxNote();
     const h = S.hist, last = pts[pts.length - 1];
     $('#chart-note').innerHTML = !pts.length ? 'Brak danych do wykresu.' : `Od ${esc(h.series[0].date)}: wartość ${zl(last.value)}, wpłaty netto ${zl(last.invested_net)}, zysk <span class="${cls(last.gain)}">${zlS(last.gain)}</span>.` +
       (h.estimated_days ? ` <span class="warn">${h.estimated_days} z ${h.series.length} dni ma oszacowane ceny części pozycji (brak historii instrumentu).</span>` : '') +
       (S.mode === 'twr' ? '<br>TWR i indeksy pokazują zwrot <b>od pierwszego dnia widocznego okresu</b> (przybliż lub wybierz 1R, YTD…, aby porównać inny okres); pozostałe miary liczone są od początku. ' +
-        'Indeksy w PLN (kurs dnia z Yahoo), cenowe – bez dywidend, jak TWR; WIG20 to ETF Beta WIG20TR (z dywidendami), bo Yahoo nie podaje historii samego indeksu.' +
+        'Indeksy w ' + CUR + ' (kurs dnia z Yahoo), cenowe – bez dywidend, jak TWR; WIG20 to ETF Beta WIG20TR (z dywidendami), bo Yahoo nie podaje historii samego indeksu.' +
         (!main.o.series.length ? ' <span class="warn">Zaznacz co najmniej jedną miarę lub indeks.</span>' : '') : '');
+  }
+  // jedno zdanie pod wykresem "Zwrot %": te same wplaty w wybranym indeksie (ta sama symulacja co w zakladce Symulacje)
+  function renderIdxNote() {
+    const box = $('#idx-note'), P = S.hist && S.hist.porownanie;
+    const bs = S.mode === 'twr' && P ? P.indeksy.filter(b => S.bench.includes(b.key)) : [];
+    box.style.display = bs.length ? '' : 'none'; if (!bs.length) return;
+    const now = idxNow();
+    box.innerHTML = 'Te same wpłaty zainwestowane w ' + bs.map(b => { const r = idxSim(b); return r === null ? `${esc(b.label)}: brak danych` :
+      `<b>${esc(b.label)}</b>: ${zl0(r)} (Twój portfel ${now - r >= 0 ? 'lepiej' : 'gorzej'} o <span class="${cls(now - r)}">${zl0(Math.abs(now - r))}</span>)`; }).join(' · ') +
+      ' · <a href="#/symulacje">jak liczone →</a>';
   }
   function renderPctTools() {
     const box = $('#pct-tools'), on = S.mode === 'twr';
@@ -244,7 +317,7 @@
     const [a, b] = main.domain(), end = b; let start = a;
     const back = {'1M': 31, '3M': 92, '6M': 183, '1R': 366, '3L': 1096}[k];
     if (back) start = end - back * Charts.DAY; else if (k === 'YTD') start = new Date(new Date(end).getFullYear(), 0, 1).getTime();
-    main.setWindow(Math.max(a, start), end, silent); if (under) under.setWindow(Math.max(a, start), end, true);
+    main.setWindow(Math.max(a, start), end, silent);
     $$('#range button').forEach(x => x.classList.toggle('on', x.dataset.k === k)); $('#zoom-reset').style.display = 'none';
   }
   $$('#range button').forEach(b => b.onclick = () => applyRange(b.dataset.k));
@@ -278,10 +351,12 @@
       t('Zwrot TWR od początku', 'twr', pct(m.twr_total), m.twr_annualized === null ? 'rocznie: od 365 dni' : 'rocznie (CAGR) ' + pct(m.twr_annualized), cls(m.twr_total)) +
       t('XIRR (rocznie)', 'xirr', pct(m.xirr), m.xirr_with_income === null ? 'wg Twoich wpłat i wypłat' : 'z dywidendami ' + pct(m.xirr_with_income), cls(m.xirr)) +
       t('Od początku roku', 'twr', pct(m.windows.YTD), '12 miesięcy: ' + pct(m.windows['12M']), cls(m.windows.YTD)) +
-      t('Maks. obsunięcie', 'dd', pct(m.drawdown.depth), m.drawdown.peak + ' → ' + m.drawdown.trough + ' · teraz ' + pct(m.drawdown.current), 'neg') +
+      t('Maks. obsunięcie', 'dd', pct(m.drawdown.depth), m.drawdown.peak + ' → ' + m.drawdown.trough + ' · teraz ' + pct(m.drawdown.current), 'neg');
+    $('#met-risk').innerHTML =
       t('Największy spadek zysku', 'pd', zl0(m.profit_drawdown.amount), m.profit_drawdown.peak ? m.profit_drawdown.peak + ' → ' + m.profit_drawdown.trough : '', 'neg') +
-      t('Zmienność roczna', 'vol', m.volatility === null ? '—' : (m.volatility * 100).toLocaleString('pl-PL', {maximumFractionDigits: 1}) + '%', 'zwrot / ryzyko: ' + (m.return_to_risk === null ? '—' : m.return_to_risk.toLocaleString('pl-PL', {maximumFractionDigits: 2}))) +
-      t('Stopa dywidendy (12 m)', 'dy', pct(m.dividend_yield), 'do kosztu: ' + pct(m.yield_on_cost) + ' · ' + zl(m.income_12m));
+      t('Zmienność roczna', 'vol', m.volatility === null ? '—' : (m.volatility * 100).toLocaleString('pl-PL', {maximumFractionDigits: 1}) + '%', 'odchylenie dziennych zwrotów w skali roku') +
+      t('Zwrot / ryzyko', 'vol', m.return_to_risk === null ? '—' : m.return_to_risk.toLocaleString('pl-PL', {maximumFractionDigits: 2}), 'roczny TWR / zmienność (od roku historii)');
+    renderHeat(); renderUnder(); renderIncTiles();
     const names = [['1M', '1 mies.'], ['3M', '3 mies.'], ['6M', '6 mies.'], ['YTD', 'od pocz. roku'], ['12M', '12 mies.']];
     const vals = names.map(([k]) => m.windows[k]).concat([m.twr_total]).filter(v => v !== null), mx = Math.max(0.0001, ...vals.map(Math.abs));
     $('#met-windows').innerHTML = names.concat([['ALL', 'od początku']]).map(([k, l]) => { const v = k === 'ALL' ? m.twr_total : m.windows[k];
@@ -290,6 +365,22 @@
         <b class="num ${cls(v)}" style="text-align:right">${v === null ? '—' : pct(v)}</b></div>`; }).join('');
     $('#met-years tbody').innerHTML = m.years.slice().reverse().map(y => `<tr><td>${y.year}${y.partial ? ' <span class="muted">(część)</span>' : ''}</td><td class="n">${zl(y.start_value)}</td><td class="n">${zl(y.net_contributions)}</td><td class="n">${zl(y.end_value)}</td><td class="n ${cls(y.gain)}">${zlS(y.gain)}</td><td class="n ${cls(y.twr)}">${pct(y.twr)}</td></tr>`).join('');
     $('#met-episodes tbody').innerHTML = m.drawdown_episodes.map(e => `<tr><td>${e.peak}</td><td>${e.trough}</td><td class="n neg">${pct(e.depth)}</td><td class="n neg">${zlS(e.profit_change)}</td><td>${e.ongoing ? '<span class="badge warn">trwa</span>' : e.recovered}</td></tr>`).join('');
+  }
+  // mapa miesiecznych zwrotow (TWR miesiaca; kolor: zysk / strata, nasycenie do 10%)
+  function renderHeat() {
+    const m = S.met; if (!m || !m.monthly) return;
+    const M = ['Sty', 'Lut', 'Mar', 'Kwi', 'Maj', 'Cze', 'Lip', 'Sie', 'Wrz', 'Paź', 'Lis', 'Gru'];
+    const cell = (v, extra) => { if (v === null || v === undefined) return `<td class="e ${extra || ''}">·</td>`;
+      const a = Math.round(Math.min(1, Math.abs(v) / 0.10) * 55 + 8);
+      return `<td class="${extra || ''}" style="background:color-mix(in srgb, var(--${v >= 0 ? 'pos' : 'neg'}) ${a}%, transparent)">${pct(v, 1)}</td>`; };
+    $('#heat thead').innerHTML = '<tr><th>Rok</th>' + M.map(x => `<th>${x}</th>`).join('') + '<th>Rok</th></tr>';
+    $('#heat tbody').innerHTML = m.monthly.slice().reverse().map(y => `<tr><td>${y.year}</td>${y.months.map(v => cell(v)).join('')}${cell(y.total, 'y')}</tr>`).join('');
+  }
+  let under = null;
+  function renderUnder() {
+    if (!S.met || !S.met.index_series) return;
+    if (!under) under = new Charts.TimeChart($('#under'), {height: 170, navigator: false, series: [{key: 'dd', label: 'Obsunięcie od szczytu', color: 'var(--neg)', area: true}], fmtY: v => pct(v, 0)});
+    under.setData(S.met.index_series.map(([d, i, dd]) => ({t: new Date(d + 'T00:00:00').getTime(), dd})));
   }
 
   // ---------------------------------------------------------------- dochody
@@ -311,6 +402,14 @@
     const tot = months.reduce((a, r) => a + r.dividends + r.interest + r.rewards + r.fees, 0);
     $('#inc-note').textContent = (S.incAll ? 'Cały okres' : 'Ostatnie 24 miesiące') + ': ' + zl(tot) + ' (po podatkach pobranych przez brokera). Odsetki naliczone, ale jeszcze niewypłacone, nie są na wykresie.';
   }
+  function renderIncTiles() {
+    const s = S.live && S.live.scope, m = S.met && S.met.available ? S.met : null; if (!s) return;
+    const t = (l, v, sub, c) => `<div class="m"><div class="l">${l}</div><div class="v ${c || ''}">${v}</div><div class="s">${sub || ''}</div></div>`, i12 = s.income_12m || {};
+    $('#inc-tiles').innerHTML = t('Dochody 12 mies.', zlS(i12.total), 'dywidendy ' + zl(i12.dividends) + ' · odsetki ' + zl(i12.interest) + (+i12.rewards ? ' · nagrody ' + zl(i12.rewards) : ''), cls(i12.total)) +
+      t('Dywidendy netto – razem', zl(s.dividends_net), 'brutto ' + zl(s.dividends_gross) + ' · podatek ' + zl(s.withholding_tax)) +
+      t('Odsetki netto – razem', zl(s.interest_net), (+s.rewards ? 'nagrody ' + zl(s.rewards) + ' · ' : '') + 'opłaty ' + zl(s.fees)) +
+      t('Stopa dywidendy (12 m) ' + info('dy'), m ? pct(m.dividend_yield) : '—', m ? 'do kosztu: ' + pct(m.yield_on_cost) + ' · dywidendy 12 m ' + zl(m.income_12m) : '');
+  }
   $('#inc-all').onclick = e => { S.incAll = !S.incAll; e.target.textContent = S.incAll ? 'Ostatnie 24 mies.' : 'Cały okres'; renderIncome(); };
 
   // ---------------------------------------------------------------- kontrola liczb
@@ -319,8 +418,8 @@
       const a = await getJSON('/api/kontrola?scope=' + SCOPE); S.audit = a;
       const rows = a.checks || [], bad = rows.filter(c => c.status !== 'OK'), err = rows.some(c => c.status === 'BLAD');
       const badge = !rows.length ? '' : a.ok ? `<span class="badge ok">✓ ${rows.length}/${rows.length} zgodne</span>` : `<span class="badge ${err ? 'bad' : 'warn'}">${err ? '✗' : '!'} do sprawdzenia ${bad.length} z ${rows.length}</span>`;
-      $('#audit-badge').innerHTML = badge; $('#audit-top').innerHTML = rows.length ? `<a href="#szczegoly">Kontrola liczb: ${badge}</a>` : '';
-      const al = $('#audit-top a'); if (al.tagName === 'A') al.onclick = () => { if (viewOf() !== 'portfel') location.hash = '#/portfel'; $('#sec-audit').open = true; setTimeout(() => $('#sec-audit').scrollIntoView({behavior: 'smooth'}), 50); return false; };
+      $('#audit-badge').innerHTML = badge; $('#audit-top').innerHTML = rows.length ? `<a href="#/dane">Kontrola liczb: ${badge}</a>` : '';
+      const al = $('#audit-top a'); if (al.tagName === 'A') al.onclick = () => { location.hash = '#/dane'; $('#sec-audit').open = true; setTimeout(() => $('#sec-audit').scrollIntoView({behavior: 'smooth'}), 50); return false; };
       $('#audit tbody').innerHTML = rows.map((c, i) => `<tr><td style="white-space:normal">${esc(c.kontrola)}</td><td><span class="badge ${c.status === 'OK' ? 'ok' : c.status === 'BLAD' ? 'bad' : 'warn'}">${c.status === 'OK' ? '✓ zgodne' : c.status === 'BLAD' ? '✗ błąd' : '! uwaga'}</span></td><td class="muted" style="white-space:normal">${esc(c.szczegoly || '')}</td></tr>` +
         (c.przyczyna ? `<tr class="fix"><td colspan="3"><b>Prawdopodobna przyczyna:</b> ${esc(c.przyczyna)}<div class="acts">${(c.rozwiazania || []).map((r, j) => `<button class="btn ${j === 0 ? 'primary' : ''}" data-c="${i}" data-r="${j}">${esc(r.etykieta)}</button>`).join('')}</div></td></tr>` : '')).join('');
       $$('#audit tr.fix button').forEach(b => b.onclick = () => runFix(rows[+b.dataset.c].rozwiazania[+b.dataset.r], b));
@@ -373,20 +472,22 @@
     } catch (e) { /* brak pytan */ }
   }
 
-  // ---------------------------------------------------------------- zakladki widokow (Portfel / Ekspozycja / Gotowka / Symulacje)
-  const VIEWS = ['portfel', 'ekspozycja', 'gotowka', 'symulacje'];
+  // ---------------------------------------------------------------- zakladki widokow (Portfel / Analiza / Dochody / Ekspozycja / Gotowka / Symulacje / Dane)
+  const VIEWS = ['portfel', 'analiza', 'dochody', 'ekspozycja', 'gotowka', 'symulacje', 'dane'];
   const viewOf = () => { const m = location.hash.match(/^#\/(\w+)/); return m && VIEWS.includes(m[1]) ? m[1] : 'portfel'; };
   function showView() {
     const v = viewOf();
     $$('.view').forEach(x => x.hidden = x.dataset.view !== v);
     $$('.vtab').forEach(a => a.classList.toggle('on', a.dataset.v === v));
-    $('.secnav').style.display = v === 'portfel' ? '' : 'none';
-    $$('nav.seg a').forEach(a => { a.href = a.href.split('#')[0] + (v === 'portfel' ? '' : '#/' + v); });     // zmiana zakresu zostaje w tej samej zakladce
     if (v === 'gotowka') loadCash();
-    if (v === 'ekspozycja' && window.renderExposure) window.renderExposure();
+    if (v === 'ekspozycja') { if (window.renderExposure) window.renderExposure(); renderAlloc(); }
     if (v === 'symulacje' && window.renderSim) window.renderSim();
-    if (v === 'portfel') redrawAll();
+    if (v === 'analiza' && under) under.render();
+    if (v === 'dochody') renderIncome();
+    if (v === 'portfel' && main) main.render();
   }
+  // wybor portfela (zakresu): ta sama zakladka po przelaczeniu
+  $('#scope-sel').onchange = e => { location.href = '/podglad?scope=' + encodeURIComponent(e.target.value) + (viewOf() === 'portfel' ? '' : '#/' + viewOf()); };
   window.addEventListener('hashchange', () => { if (location.hash.startsWith('#/')) { showView(); window.scrollTo(0, 0); } });
 
   // ---------------------------------------------------------------- ekspozycja (podzial wartosci papierow)
@@ -405,11 +506,12 @@
     const ps = (d.pozycje || []).map(p => Object.assign(p, {value: +p.value})).filter(p => p.value > 0), tot = ps.reduce((a, p) => a + p.value, 0);
     if (!ps.length) { box.innerHTML = '<p class="muted">Brak otwartych pozycji.</p>'; return; }
     const group = f => { const g = {}; ps.forEach(p => { const k = f(p); g[k] = (g[k] || 0) + p.value; }); return Object.entries(g).map(([label, value], i) => ({label, value})).sort((a, b) => b.value - a.value).map((x, i) => Object.assign(x, {color: PAL[i % PAL.length]})); };
+    const lastNoData = arr => { const i = arr.findIndex(x => x.label === 'brak danych'); if (i >= 0) { const [x] = arr.splice(i, 1); x.color = 'var(--line2)'; arr.push(x); } return arr; };
     const dims = [
       ['Typ instrumentu', group(typeOf), 'akcje pojedynczych spółek vs fundusze ETF'],
-      ['Sektor (akcje)', group(p => typeOf(p) === 'ETF' ? 'ETF (skład nierozpisany)' : (SECTOR_PL[p.sector] || p.sector || 'brak danych')), 'sektor spółki wg Yahoo Finance; dla ETF dostawca nie podaje składu'],
-      ['Rynek notowania', group(p => marketOf(p.exchange || p.ref_exchange)), 'giełda, na której notowany jest instrument (nie kraj spółek w ETF)'],
-      ['Waluta notowania', group(p => p.currency || 'brak danych'), 'waluta, w której notowany jest instrument – ryzyko kursowe wobec PLN'],
+      ['Sektor (akcje)', lastNoData(group(p => typeOf(p) === 'ETF' ? 'ETF (skład nierozpisany)' : (SECTOR_PL[p.sector] || p.sector || 'brak danych'))), 'sektor spółki wg Yahoo Finance; dla ETF dostawca nie podaje składu'],
+      ['Waluta notowania', lastNoData(group(p => p.currency || 'brak danych')), 'waluta, w której notowany jest instrument – ryzyko kursowe wobec PLN'],
+      ['Rynek notowania', lastNoData(group(p => marketOf(p.exchange || p.ref_exchange))), 'giełda, na której notowany jest instrument – dla ETF to giełda notowania funduszu, nie kraj spółek w jego składzie; „brak danych”: Yahoo nie podało giełdy'],
     ];
     const top = ps.slice(0, 10), top5 = ps.slice(0, 5).reduce((a, p) => a + p.value, 0) / tot;
     box.innerHTML = dims.map((x, i) => `<div><h3>${x[0]}</h3><div id="exp-d${i}"></div><p class="note">${x[2]}</p></div>`).join('') +
@@ -443,13 +545,13 @@
         <div class="seg" id="sim-mode" style="margin-bottom:14px"><button data-k="proj" class="on">Projekcja i cel</button><button data-k="idx">Co gdybym inwestował w indeks</button></div>
         <div id="sim-proj">
           <form class="iform" id="sim-form" style="border:0;padding:0;margin:0">
-            <label>Wartość startowa (zł)<input name="start" inputmode="decimal" value="${d.start}"></label>
-            <label>Wpłata miesięczna (zł)<input name="monthly" inputmode="decimal" value="${d.monthly}"></label>
+            <label>Wartość startowa (${SYM})<input name="start" inputmode="decimal" value="${d.start}"></label>
+            <label>Wpłata miesięczna (${SYM})<input name="monthly" inputmode="decimal" value="${d.monthly}"></label>
             <label>Wzrost wpłat co rok (%)<input name="growth" inputmode="decimal" value="0"></label>
             <label>Stopa zwrotu rocznie (%)<input name="rate" inputmode="decimal" value="${String(d.rate).replace('.', ',')}"></label>
             <label>Lata<input name="years" inputmode="decimal" value="10"></label>
             <label>Inflacja (%)<input name="infl" inputmode="decimal" value="3"></label>
-            <label>Cel (zł, opcjonalnie)<input name="goal" inputmode="decimal" placeholder="np. 1 000 000"></label>
+            <label>Cel (${SYM}, opcjonalnie)<input name="goal" inputmode="decimal" placeholder="np. 1 000 000"></label>
             <label class="check" style="flex-direction:row;align-items:center;font-weight:600"><input type="checkbox" name="tax"> po podatku Belki 19%</label>
           </form>
           <p class="note">Podpowiedzi z Twojego portfela: TWR rocznie ${d.twr === null || d.twr === undefined ? '— (od roku historii)' : pct(d.twr)}, XIRR ${d.xirr === null || d.xirr === undefined ? '—' : pct(d.xirr)}, średnia wpłata netto z 12 mies. ${zl0(d.monthly)}. Scenariusze: stopa −3 / +3 punkty procentowe. Wpłata na koniec każdego miesiąca, kapitalizacja miesięczna.</p>
@@ -487,23 +589,24 @@
     $('#sim-tiles').innerHTML = `<div class="m"><div class="l">Wartość za ${years} lat</div><div class="v">${zl0(net(end))}</div><div class="s">pesymistycznie ${zl0(net(pes[pes.length - 1]))} · optymistycznie ${zl0(net(opt[opt.length - 1]))}</div></div>
       <div class="m"><div class="l">Suma wpłat</div><div class="v">${zl0(end.c)}</div><div class="s">w tym wartość startowa ${zl0(start)}</div></div>
       <div class="m"><div class="l">Zysk</div><div class="v ${cls(net(end) - end.c)}">${sgn(net(end) - end.c) + zl0(net(end) - end.c)}</div><div class="s">${tax ? 'po podatku Belki 19% od zysku' : 'przed podatkiem (IKE/IKZE: bez Belki przy wypłacie zgodnej z zasadami)'}</div></div>
-      <div class="m"><div class="l">W dzisiejszych złotych</div><div class="v">${zl0(real)}</div><div class="s">po inflacji ${(infl * 100).toLocaleString('pl-PL')}% rocznie</div></div>` + goalTxt;
+      <div class="m"><div class="l">W dzisiejszych pieniądzach</div><div class="v">${zl0(real)}</div><div class="s">po inflacji ${(infl * 100).toLocaleString('pl-PL')}% rocznie</div></div>` + goalTxt;
     if (!simChart) simChart = new Charts.TimeChart($('#sim-chart'), {height: 300, navigator: false, minSpan: 31 * Charts.DAY, fmtY: zl0, series: [
       {key: 'opt', label: 'Optymistyczny', color: 'var(--c4)', width: 1.5}, {key: 'pes', label: 'Pesymistyczny', color: 'var(--c5)', width: 1.5},
       {key: 'contrib', label: 'Suma wpłat', color: 'var(--c2)', width: 1.5, dash: true}, {key: 'base', label: 'Bazowy', color: 'var(--c1)', area: true, width: 2.4}]});
     simChart.setData(pts);
   }
+  // te same wplaty netto (dzien i kwota z historii portfela) zainwestowane w indeks po cenie zamkniecia dnia (w PLN): ile byloby dzis?
+  function idxSim(b) {
+    const ser = S.hist.series, lv = S.hist.porownanie.poziomy[b.key] || []; let units = 0, prevInv = 0, ok = true, last = null;
+    ser.forEach((p, i) => { const f = +p.invested_net - prevInv; prevInv = +p.invested_net; if (lv[i]) last = lv[i]; if (Math.abs(f) > 1e-9) { if (!last) { ok = false; return; } units += f / last; } });
+    return ok && last ? units * last : null;
+  }
+  const idxNow = () => S.live && S.live.scope ? +S.live.scope.assets_value : +S.hist.series[S.hist.series.length - 1].value;
   function runIdx() {
-    // te same wplaty netto (dzien i kwota z historii portfela) zainwestowane w indeks po cenie zamkniecia dnia (w PLN): ile byloby dzis?
     const box = $('#sim-idx'), h = S.hist, P = h && h.porownanie;
     if (!h || !P) { box.innerHTML = '<p class="muted">Brak danych indeksów – pobierają się w tle.</p>'; return; }
-    const ser = h.series, now = S.live && S.live.scope ? +S.live.scope.assets_value : +ser[ser.length - 1].value;
-    const rows = P.indeksy.map(b => {
-      const lv = P.poziomy[b.key]; let units = 0, prevInv = 0, ok = true, last = null;
-      ser.forEach((p, i) => { const f = +p.invested_net - prevInv; prevInv = +p.invested_net; if (lv[i]) last = lv[i]; if (Math.abs(f) > 1e-9) { if (!last) { ok = false; return; } units += f / last; } });
-      const val = ok && last ? units * last : null;
-      return {b, val, diff: val === null ? null : now - val};
-    });
+    const ser = h.series, now = idxNow();
+    const rows = P.indeksy.map(b => { const val = idxSim(b); return {b, val, diff: val === null ? null : now - val}; });
     const inv = +ser[ser.length - 1].invested_net;
     box.innerHTML = `<p class="note" style="margin-top:0">Każda Twoja wpłata netto (zakup = wpłata, sprzedaż = wypłata; dla kont z lokatą – przelewy) w tym samym dniu i tej samej kwocie trafia do indeksu po cenie zamknięcia w PLN, bez kosztów. Indeksy cenowe (bez dywidend), WIG20 = ETF Beta WIG20TR (z dywidendami). Porównanie z bieżącą wartością inwestycji (papiery + lokaty, bez gotówki z banków).</p>
       <div class="table-wrap"><table><thead><tr><th>Gdybym inwestował w</th><th class="n">Wartość dziś</th><th class="n">Zysk</th><th class="n">Mój portfel vs indeks</th></tr></thead><tbody>
@@ -518,12 +621,17 @@
     const a = document.createElement('a'); a.href = '/api/eksport.xlsx?scope=' + SCOPE; a.download = ''; document.body.appendChild(a); a.click(); a.remove();
     toast('Plik zawiera Twoje dane finansowe – zapisz go tylko tam, gdzie chcesz go mieć.');
   };
+  // PDF: Portfel + Analiza + Dochody na jednym wydruku (pozostale zakladki pominiete)
   $('#exp-pdf').onclick = () => {
-    const v = viewOf(), t = document.title;
-    if (v !== 'portfel') { location.hash = '#/portfel'; }
+    const t = document.title, PRINT = ['portfel', 'analiza', 'dochody'];
     document.title = `Mój Portfel – raport ${BOOT.title} ${new Date().toISOString().slice(0, 10)}`;   // domyslna nazwa pliku PDF
     $('#print-head').textContent = `Mój Portfel · ${BOOT.title} · stan na ${new Date().toLocaleString('pl-PL')}`;
-    setTimeout(() => { redrawAll(); window.print(); document.title = t; }, 300);
+    document.body.classList.add('printing');
+    $$('.view').forEach(x => { const on = PRINT.includes(x.dataset.view); x.classList.toggle('print-on', on); if (on) x.hidden = false; });
+    setTimeout(() => {
+      redrawAll(); window.print(); document.title = t;
+      document.body.classList.remove('printing'); $$('.view').forEach(x => x.classList.remove('print-on')); showView();
+    }, 300);
   };
 
   // ---------------------------------------------------------------- gotowka
@@ -535,13 +643,12 @@
     try { S.cash = await getJSON('/api/gotowka'); renderCash(); } catch (e) { $('#cash-tiles').innerHTML = '<p class="warn">Nie udało się wczytać gotówki (' + esc(e.message) + ').</p>'; }
   }
   function renderCash() {
-    const c = S.cash, st = c.ustawienia, sumDep = (c.lokaty || []).reduce((a, d) => a + +d.value, 0);
+    const c = S.cash, st = c.ustawienia;                       // lokaty sa osobna czescia portfela (strona Portfel), nie gotowka
     const t = (l, v, s) => `<div class="m"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || ''}</div></div>`;
     const n = c.konta.length, kont = n === 1 ? 'konto' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14)) ? 'konta' : 'kont';
     $('#cash-tiles').innerHTML = t('Konta bankowe', zl(c.suma_kont), (n ? n + ' ' + kont : 'dodaj konto poniżej') + ' · ' + (st.include_cash ? '<b>wliczane</b> do wartości' : 'niewliczane')) +
       t('Wolne środki XTB', zl(c.suma_wolnych), st.include_xtb_free ? '<b>wliczane</b> do wartości' : 'niewliczane') +
-      (sumDep ? t('Lokaty u brokerów', zl(sumDep), 'zawsze wliczane (gotówka oprocentowana)') : '') +
-      t('Razem gotówka', zl(+c.suma_kont + +c.suma_wolnych + sumDep), '');
+      t('Razem gotówka', zl(+c.suma_kont + +c.suma_wolnych), 'konta bankowe + wolne środki (bez lokat)');
     syncSettings(st);
     const sel = $('#cash-add select[name=waluta]'); if (!sel.options.length) sel.innerHTML = c.waluty.map(w => `<option>${w}</option>`).join('');
     const di = $('#cash-add input[name=na_dzien]'); if (!di.value) di.value = new Date().toISOString().slice(0, 10);
@@ -566,8 +673,7 @@
         };
       };
     });
-    const rows = (c.wolne_xtb || []).map(w => `<tr><td>${esc(w.konto)}</td><td>${esc(w.broker || 'broker')} · wolne środki</td><td class="n">${zl(w.saldo)}</td><td class="muted">saldo gotówki z eksportu (wpłaty, zakupy, sprzedaże, dywidendy, podatki, opłaty)</td></tr>`)
-      .concat((c.lokaty || []).map(d => `<tr><td>${esc(d.account)}</td><td>${esc(d.broker)} · lokata ${(d.rate * 100).toLocaleString('pl-PL', {maximumFractionDigits: 2})}%</td><td class="n">${zl(d.value)}</td><td class="muted">saldo z eksportu na ${esc(d.ledger_as_of)} · zawsze w wartości portfela</td></tr>`));
+    const rows = (c.wolne_xtb || []).map(w => `<tr><td>${esc(w.konto)}</td><td>${esc(w.broker || 'broker')} · wolne środki</td><td class="n">${zl(w.saldo)}</td><td class="muted">saldo gotówki z eksportu (wpłaty, zakupy, sprzedaże, dywidendy, podatki, opłaty)</td></tr>`);
     $('#cash-brk tbody').innerHTML = rows.join('') || '<tr><td colspan="4" class="muted">Brak danych.</td></tr>';
   }
   // ustawienia (te same przelaczniki w zakladce Gotowka i w oknie ⚙): zapis, potem przeliczenie widoku
@@ -586,7 +692,10 @@
     catch (e) { i.checked = !i.checked; toast(e.message); }
   });
   $$('#set-modal input[type=radio]').forEach(i => i.onchange = async () => {
-    try { await saveSetting(i.name, i.value); toast('Zapisano – wycena przeliczona.'); } catch (e) { toast(e.message); syncSettings(S.settings); }
+    try {
+      if (i.name === 'display_currency') { await post('/api/ustawienia', {klucz: i.name, wartosc: i.value}); toast('Przeliczam w ' + i.value + '…'); setTimeout(() => location.reload(), 600); return; }
+      await saveSetting(i.name, i.value); toast('Zapisano – wycena przeliczona.');
+    } catch (e) { toast(e.message); syncSettings(S.settings); }
   });
   $('#settings-btn').onclick = async () => {
     try { syncSettings((await getJSON('/api/gotowka')).ustawienia); } catch (e) { /* baza niedostepna */ }
@@ -681,7 +790,7 @@
         st.className = 'status' + (s.state === 'error' ? ' err' : ''); st.querySelector('span:last-child').textContent = s.state === 'error' ? 'Ceny nie zostały pobrane' : 'Dane aktualne';
         $('#bg-progress').style.display = 'none';
       }
-      if (S.version !== null && s.version !== S.version) { loadLive({fast: true}); loadHistory(); loadAudit(); if (s.state !== 'running') loadQuestions(); }
+      if (S.version !== null && s.version !== S.version) { loadLive({fast: true}); loadHistory(); loadAudit(); loadClosed(); S.pcharts = {}; if (s.state !== 'running') loadQuestions(); }
       S.version = s.version;
       setTimeout(pollStatus, s.state === 'running' ? 2000 : 15000);
     } catch (e) { setTimeout(pollStatus, 5000); }
@@ -743,13 +852,13 @@
     document.body.innerHTML = '<div style="max-width:520px;margin:15vh auto;text-align:center;font:16px system-ui;color:var(--ink)"><div style="font-size:2.4rem">⏻</div><h2>Aplikacja zamknięta</h2><p style="color:var(--muted)">Możesz zamknąć tę kartę. Dane są zapisane na tym komputerze.</p></div>';
   };
 
-  function redrawAll() { if (main) main.render(); if (under) under.render(); renderAlloc(); renderIncome(); }
+  function redrawAll() { if (main) main.render(); if (under) under.render(); renderAlloc(); renderIncome(); Object.values(S.pcharts).forEach(p => p.chart && p.chart.render()); }
   $('#refresh').onclick = async () => { $('#refresh').disabled = true; await loadLive({force: true}); $('#refresh').disabled = false; toast('Ceny odświeżone.'); };
 
   // ---------------------------------------------------------------- start: najpierw zapisane ceny (szybko), potem swieze
   if (BOOT.has_data) {
     loadLive({fast: true}).then(() => loadLive());
-    loadHistory(); loadIncome(); loadAudit();
+    loadHistory(); loadIncome(); loadAudit(); loadClosed();
     setInterval(() => loadLive(), 60000);
   }
   if (BOOT.has_data) showView();

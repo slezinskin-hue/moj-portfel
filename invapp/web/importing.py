@@ -247,6 +247,7 @@ def _pricing_pass():
         steps += [(t, f, False) for t, f in ph["history"]]
         steps += [("Ceny historyczne i kursy dzienne", lambda: history.refresh_history(conn, history.HistoryYahoo()), True),
                   ("Indeksy do porównania", lambda: benchmarks.refresh(conn, history.HistoryYahoo()), True),
+                  ("Kursy dzienne waluty prezentacji", lambda: _display_currency_history(conn), True),
                   ("Profile instrumentów (sektory)", lambda: profiles.refresh(conn, YahooProvider()), True),
                   ("Kursy NBP", lambda: service.refresh_nbp(conn, NbpProvider()), True)]
         _set(steps=len(steps))
@@ -264,6 +265,19 @@ def _pricing_pass():
                 conn.rollback(); _log(f"pominięto ({type(e).__name__}): {title}")
     finally:
         conn.close()
+
+
+def _display_currency_history(conn):
+    """Kursy dzienne waluty prezentacji (docs/WALUTA.md) od pierwszej operacji - potrzebne do przeliczenia kazdego przeplywu po kursie z jego dnia."""
+    from datetime import date
+    from invapp.pricing import currency, history
+    cur = conn.cursor()
+    w = currency.display_currency(cur)
+    if w == "PLN":
+        return {"waluta": "PLN"}
+    cur.execute("select min((occurred_at at time zone 'UTC')::date) from transactions")
+    first = cur.fetchone()[0] or date(2024, 1, 1)
+    return history.refresh_fx(conn, history.HistoryYahoo(), {w}, start=min(first, date(2024, 1, 1)))
 
 
 def background_pricing(run_once=None):

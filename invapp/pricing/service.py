@@ -104,6 +104,8 @@ def refresh_quotes(conn, provider, pause=0.3):
             res["quotes_new"] += 1
         else:
             res["quotes_same"] += 1
+    from .currency import display_currency
+    currencies.add(display_currency(cur))                      # kurs teraz waluty prezentacji (docs/WALUTA.md)
     fx = fetch_all(lambda c: provider.fx(c, "PLN"), sorted(currencies - {"PLN"}))
     for ccy, (f, err) in sorted(fx.items()):
         if err is not None:

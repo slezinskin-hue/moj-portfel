@@ -83,7 +83,8 @@ class TestSkeleton(unittest.TestCase):
             for fragment in ("Wczytaj eksporty", "Trade Republic", "WSZYSTKIE", "/static/app.js", "/static/charts.js"):
                 self.assertIn(fragment, r.text)
             if "Portfel jest jeszcze pusty" not in r.text:                  # z danymi: wszystkie sekcje
-                for fragment in ("Wartość portfela", "Kontrola liczb", "Wskaźniki inwestora", "Korekty splitów", "Instrumenty i weryfikacja waluty", "Raport importu", "Pozycje", "Alokacja", "Dywidendy i inne dochody"):
+                for fragment in ("Wartość portfela", "Kontrola liczb", "Wskaźniki inwestora", "Korekty splitów", "Instrumenty i weryfikacja waluty", "Raport importu", "Pozycje", "Alokacja", "Dywidendy i inne dochody",
+                                 "Analiza", "Mapa miesięcznych zwrotów", "Zamknięte", "Śr. koszt", "Dziś", "Dochody 12 mies.", "Lokaty", "Jak liczone są liczby"):
                     self.assertIn(fragment, r.text)
         for path in ("/static/app.js", "/static/charts.js", "/static/app.css"):
             self.assertEqual(self.client.get(path).status_code, 200, path)
@@ -97,7 +98,7 @@ class TestSkeleton(unittest.TestCase):
             if r.status_code == 200:
                 self.assertIn("Wczytaj eksporty", r.text)
                 self.assertNotIn("wolne środki:", r.text.lower().replace("wolne środki nie są", ""))      # wolne srodki nie sa pokazywane
-            for path in ("/api/zywo", "/api/historia", "/api/wskazniki", "/api/kontrola", "/api/dochody"):
+            for path in ("/api/zywo", "/api/historia", "/api/wskazniki", "/api/kontrola", "/api/dochody", "/api/zamkniete"):
                 self.assertIn(self.client.get(path, params={"scope": scope}).status_code, (200, 503), path + scope)
 
     def test_all_prices_are_shown_in_pln(self):

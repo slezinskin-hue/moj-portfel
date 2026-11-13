@@ -22,7 +22,7 @@ więc zainstalowana aplikacja nie zobaczy „bazy nowszej niż program”.
    Kopia zastępuje dane testowe; dane zainstalowanej aplikacji nie są zmieniane.
 3. **Testy automatyczne** (te same co na GitHubie):
    ```
-   python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow
+   python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow tests.test_pozycje tests.test_waluta
    ```
    Pełny zestaw na Twoich prawdziwych eksportach (pliki w `export\`, testy lokalne – nie trafiają do repozytorium):
    ```

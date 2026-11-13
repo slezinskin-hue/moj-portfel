@@ -187,6 +187,19 @@ def _legacy_first_run(sec_new):
     c.cursor().execute("SELECT pg_reload_conf()"); c.close()
 
 
+ALLOW_SOURCE_MIGRATION_ENV = "INVAPP_ALLOW_SOURCE_MIGRATION"
+
+
+def source_migration_blocked(todo, had):
+    """Wersja ze ZRODEL nie migruje istniejacej bazy w katalogu ZAINSTALOWANEJ aplikacji (prawdziwe dane): migracja ze zrodel wyprzedzilaby
+    zainstalowana wersje i ta przestalaby sie uruchamiac ("Baza ma migracje nowsze niz ten program") - zdarzenie z 2026-11-13 (podglad ze zrodel
+    z --data-dir na prawdziwe dane). Prawdziwe dane migruje tylko zainstalowana aplikacja (po aktualizacji). Swiadomy wyjatek: zmienna
+    INVAPP_ALLOW_SOURCE_MIGRATION=1."""
+    if not todo or not had or config.is_installed() or os.environ.get(ALLOW_SOURCE_MIGRATION_ENV) == "1":
+        return False
+    return config.data_dir().resolve() == config.installed_data_dir().resolve()
+
+
 def start(stop_on_exit=False):
     """Uruchamia (albo podlacza sie do dzialajacego) wbudowany serwer i przygotowuje baze. Idempotentne.
     stop_on_exit=True (aplikacja): zatrzymaj serwer przy wyjsciu takze wtedy, gdy byl juz uruchomiony (np. pozostal po awarii)."""
@@ -212,6 +225,10 @@ def start(stop_on_exit=False):
         try:
             todo = migrate.pending(conn)
             cur = conn.cursor(); cur.execute("SELECT count(*) FROM schema_migrations"); had = cur.fetchone()[0]
+            if source_migration_blocked(todo, had):
+                raise migrate.MigrationError("Wersja ze źródeł nie zmienia bazy prawdziwych danych (folder zainstalowanej aplikacji): nowe migracje "
+                                             "zablokowałyby zainstalowaną wersję. Do prób użyj danych testowych (uruchom.py) albo kopii "
+                                             "(python -m invapp.tools.kopiuj_dane).")
             if todo and had:                               # aktualizacja programu na istniejacych danych: najpierw kopia
                 from invapp.db import backup
                 backup.create(label="przed-migracja")

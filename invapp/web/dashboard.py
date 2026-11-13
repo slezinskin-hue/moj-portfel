@@ -93,7 +93,7 @@ def load(scope_key="all"):
                  from transactions t where t.status = 'ACTIVE' and t.account_id in {sc_accounts}
                    and t.txn_type in ('DIVIDEND','TAX_WITHHOLDING','INTEREST','TAX_INTEREST','FEE','REWARD') group by 1 order by 1 desc""", (code,))
         alias = "(select min(la.broker_symbol) from listing_aliases la where la.listing_id = l.listing_id and la.valid_to is null)"
-        data["dividends_by_instrument"] = q(f"""select {alias} as ticker, l.display_name as instrument,
+        data["dividends_by_instrument"] = q(f"""select l.listing_id, {alias} as ticker, l.display_name as instrument,
                     sum(t.cash_amount) filter (where t.txn_type = 'DIVIDEND') as gross, sum(t.cash_amount) filter (where t.txn_type = 'TAX_WITHHOLDING') as tax,
                     sum(t.cash_amount) as net, count(*) filter (where t.txn_type = 'DIVIDEND' and (t.details->>'is_correction') is distinct from 'true') as payments,
                     max(t.occurred_at) filter (where t.txn_type = 'DIVIDEND') as last_payment
@@ -116,9 +116,41 @@ def load(scope_key="all"):
                                     from listings l join securities s using (security_id)
                                     where exists (select 1 from transactions t where t.listing_id = l.listing_id and t.account_id in {sc_accounts})
                                     order by (l.currency_status = 'NIEZNANY') desc, 1""", (code,))
+        from invapp.pricing import currency
+        pcur = conn.cursor()
+        data["waluta"] = _display(pcur)
+        data["sym"] = currency.SYMBOL.get(data["waluta"], data["waluta"])
+        if data["waluta"] != "PLN":
+            _income_tables_in(pcur, data, code)
         return data
     finally:
         conn.close()
+
+
+def _income_tables_in(cur, data, code):
+    """Tabele dochodow (wg roku, wg spolki, ostatnie wyplaty) w walucie prezentacji: kazda operacja / kurs ze swojego dnia."""
+    from collections import defaultdict
+    from invapp.pricing import currency
+    w = data["waluta"]; r = currency.Rates(cur, w)
+    years = defaultdict(lambda: defaultdict(float)); by_listing = defaultdict(float)
+    for typ, d, amt, lst, _ in currency.income_txns(cur, _scope_accounts(cur, code)):
+        v = r.conv(amt, d)
+        if v is None:
+            continue
+        y = years[d.year]
+        key = {"DIVIDEND": "dividends_gross", "TAX_WITHHOLDING": "withholding_tax", "INTEREST": "interest_net", "TAX_INTEREST": "interest_net"}.get(typ, "other")
+        y[key] += float(v)
+        if typ in ("DIVIDEND", "TAX_WITHHOLDING"):
+            y["dividends_net"] += float(v); by_listing[lst] += float(v)
+    data["income_by_year"] = [{"year": yr, **{k: years[yr].get(k, 0.0) for k in ("dividends_gross", "withholding_tax", "dividends_net", "interest_net", "other")}}
+                              for yr in sorted(years, reverse=True)]
+    for row in data["dividends_by_instrument"]:
+        row["net"] = by_listing.get(row["listing_id"], 0.0)
+    data["dividends_by_instrument"].sort(key=lambda x: -(x["net"] or 0))
+    for row in data["recent_dividends"]:
+        d = row["occurred_at"].date()
+        row["gross"], row["tax"] = r.conv(row["gross"], d), r.conv(row["tax"], d)
+        row["net"] = (row["gross"] + row["tax"]) if (row["gross"] is not None and row["tax"] is not None) else None
 
 
 # ---------------------------------------------------------------- ceny na zywo, historia, wskazniki, kontrola
@@ -183,12 +215,75 @@ def live_data(scope_key="all"):
                 r["value_native"] = None
             r["accounts"] = by_acc.get(r["listing_id"], [])
             positions.append(r)
+        from invapp.pricing import positions as pos_calc
+        pcur = conn.cursor()
+        day = pos_calc.add_day_and_average(pcur, positions)                     # kolumny "Dzis" i "Sredni koszt"
         scope = dict(row) if row else None
         deps = deposits_of(conn, code)
         if scope is not None:
             add_deposits(scope, deps)
             add_cash(scope, conn, normalize_scope(scope_key), code)
-        return {"scope": scope, "positions": positions, "deposits": deps["items"]}
+            scope["income_12m"] = pos_calc.income_12m(pcur, _scope_accounts(pcur, code))
+        out = {"scope": scope, "positions": positions, "deposits": deps["items"], "day_ref": day["ref_date"], "waluta": "PLN"}
+        w = _display(pcur)
+        if w != "PLN":                                                            # waluta prezentacji (opcja 2, docs/WALUTA.md)
+            from invapp.pricing import currency
+            out = currency.convert_live(pcur, out, w, _scope_accounts(pcur, code))
+        return out
+    finally:
+        conn.close()
+
+
+def _scope_accounts(cur, code):
+    cur.execute("select sa.account_id from scope_accounts sa join scopes s using (scope_id) where s.code = %s", (code,))
+    return [r[0] for r in cur.fetchall()]
+
+
+def closed_data(scope_key="all"):
+    """Zamkniete pozycje (sprzedaze pogrupowane po instrumencie) i suma zysku zrealizowanego z podsumowania zakresu (do porownania)."""
+    from invapp.pricing import positions as pos_calc
+    code = scope_code(normalize_scope(scope_key))
+    conn = _connect(readonly=True)
+    try:
+        cur = conn.cursor()
+        accounts = _scope_accounts(cur, code)
+        items = pos_calc.closed_positions(cur, accounts)
+        cur.execute("select realized_gain from v_scope_summary where scope_code = %s", (code,))
+        r = cur.fetchone()
+        out = {"pozycje": items, "zysk_zrealizowany": r[0] if r else 0, "waluta": "PLN"}
+        w = _display(cur)
+        if w != "PLN":                                  # przychod po kursie z dnia sprzedazy, koszt po kursie z dnia zakupu (currency.lots_in)
+            from invapp.pricing import currency
+            lots = currency.lots_in(cur, accounts, currency.Rates(cur, w))
+            for it in items:
+                lo = lots.get(it["listing_id"])
+                if lo is None or lo["missing"]:
+                    it["proceeds"] = it["cost"] = it["realized"] = it["realized_pct"] = None; continue
+                it["proceeds"], it["realized"] = lo["sales"], lo["realized"]
+                it["cost"] = lo["sales"] - lo["realized"]
+                it["realized_pct"] = (it["realized"] / it["cost"]) if it["cost"] else None
+            out["zysk_zrealizowany"] = sum((it["realized"] for it in items if it["realized"] is not None), 0)
+            out["waluta"] = w
+        return out
+    finally:
+        conn.close()
+
+
+def position_data(scope_key="all", listing_id=0):
+    """Wykres jednej pozycji: zamkniecia dzienne i transakcje kupna/sprzedazy z kont zakresu."""
+    from invapp.pricing import positions as pos_calc
+    code = scope_code(normalize_scope(scope_key))
+    conn = _connect(readonly=True)
+    try:
+        cur = conn.cursor()
+        out = pos_calc.position_chart(cur, int(listing_id), _scope_accounts(cur, code))
+        w = _display(cur); out["waluta_kwot"] = w
+        if w != "PLN":
+            from invapp.pricing import currency
+            r = currency.Rates(cur, w)
+            for t in out["transakcje"]:
+                t["kwota"] = r.conv(t["kwota"], t["data"])
+        return out
     finally:
         conn.close()
 
@@ -224,9 +319,23 @@ def exposure_data(scope_key="all"):
                         where p.account_id in (select sa.account_id from scope_accounts sa join scopes sc using (scope_id) where sc.code = %s)
                         group by l.listing_id, l.display_name, l.trading_currency, s.asset_class having sum(p.value_used) is not null
                         order by sum(p.value_used) desc""", (code,))
-        return {"pozycje": [dict(r) for r in cur.fetchall()]}
+        rows = [dict(r) for r in cur.fetchall()]
+        pcur = conn.cursor(); w = _display(pcur)
+        if w != "PLN":
+            from invapp.pricing import currency
+            k = currency.live_rate(pcur, w)
+            for r in rows:
+                r["value"] = (r["value"] / k) if k else None
+            rows = [r for r in rows if r["value"] is not None]
+        return {"pozycje": rows, "waluta": w}
     finally:
         conn.close()
+
+
+def _display(cur):
+    """Waluta prezentacji z ustawien (PLN domyslnie)."""
+    from invapp.pricing import currency
+    return currency.display_currency(cur)
 
 
 def _has_table(cur, name):
@@ -243,8 +352,17 @@ def cash_data(scope_key="all"):
         cur = conn.cursor()
         konta = cash.accounts(cur)
         wolne = cash.broker_free_funds(cur, scope_code("all"))
-        return {"ustawienia": cash.get_settings(cur), "konta": konta, "waluty": list(cash.CURRENCIES),
-                "suma_kont": sum((a["wartosc_pln"] or 0 for a in konta), 0), "wolne_xtb": wolne, "suma_wolnych": sum((w["saldo"] for w in wolne), 0),
+        w, k = _display(cur), None
+        if w != "PLN":                                  # waluta prezentacji: kwoty / kurs teraz (pole wartosc_pln = wartosc w walucie prezentacji)
+            from invapp.pricing import currency
+            k = currency.live_rate(cur, w)
+            conv = lambda v: (v / k) if (v is not None and k) else None  # noqa: E731
+            for a in konta:
+                a["wartosc_pln"] = conv(a["wartosc_pln"])
+            for x in wolne:
+                x["saldo"] = conv(x["saldo"])
+        return {"ustawienia": cash.get_settings(cur), "konta": konta, "waluty": list(cash.CURRENCIES), "waluta": w, "kurs": k,
+                "suma_kont": sum((a["wartosc_pln"] or 0 for a in konta), 0), "wolne_xtb": wolne, "suma_wolnych": sum((x["saldo"] or 0 for x in wolne), 0),
                 "lokaty": deposits_of(conn, scope_code("all"))["items"]}
     finally:
         conn.close()
@@ -272,22 +390,32 @@ def add_deposits(scope, deps):
 def history_data(scope_key="all"):
     from invapp.pricing import history
     code = scope_code(normalize_scope(scope_key))
-    with _lock:
-        hit = _cache["hist"].get(code)
-        if hit and _time.time() - hit[0] < HIST_TTL:
-            return hit[1]
-    from invapp.pricing import benchmarks
+    from invapp.pricing import benchmarks, currency
     conn = _connect(readonly=True)
     try:
+        w = _display(conn.cursor())
+        with _lock:
+            hit = _cache["hist"].get((code, w))
+            if hit and _time.time() - hit[0] < HIST_TTL:
+                return hit[1]
         s = history.build_series(conn, code)
         try:                                                    # indeksy do porownania (wykres "Zwrot %"), w PLN, na dni serii
             s["porownanie"] = benchmarks.levels(conn, [date.fromisoformat(p["date"]) for p in s["series"]])
         except psycopg2.Error:
             conn.rollback(); s["porownanie"] = None
+        s["waluta"] = w
+        if w != "PLN":                                          # waluta prezentacji: wartosc dnia / kurs(d), przeplywy / kurs(dnia przeplywu)
+            r = currency.Rates(conn.cursor(), w)
+            cs = currency.convert_series(s["series"], r)
+            s["series"], s["estimated_fx_days"] = cs["series"], cs["estimated_fx_days"]
+            if s.get("porownanie"):
+                ks = [p["fx"] for p in s["series"]]
+                s["porownanie"]["poziomy"] = {key: [(v / float(k)) if (v is not None and k) else None for v, k in zip(lv, ks)]
+                                             for key, lv in s["porownanie"]["poziomy"].items()}
     finally:
         conn.close()
     with _lock:
-        _cache["hist"][code] = (_time.time(), s)
+        _cache["hist"][(code, w)] = (_time.time(), s)
     return s
 
 
@@ -320,6 +448,11 @@ def metrics_data(scope_key="all"):
                          and t.account_id in (select sa.account_id from scope_accounts sa join scopes sc using (scope_id) where sc.code = %s)
                        group by 1 order by 1""", (code,))
         income = [(d, float(a)) for d, a in cur.fetchall()]
+        w = _display(cur)
+        if w != "PLN":                                          # dochod dnia / kurs(d)
+            from invapp.pricing import currency
+            r = currency.Rates(cur, w)
+            income = [(d, a / float(r.on(d))) for d, a in income if r.on(d)]
     finally:
         conn.close()
     out = metrics.compute(series, income=income, cost_left=cost_left)
@@ -333,6 +466,9 @@ def income_monthly(scope_key="all"):
     conn = _connect(readonly=True)
     try:
         cur = conn.cursor()
+        w = _display(cur)
+        if w != "PLN":
+            return _income_monthly_in(cur, code, w)
         cur.execute("""select to_char(t.occurred_at at time zone 'UTC', 'YYYY-MM') as m,
                               coalesce(sum(t.cash_amount) filter (where t.txn_type in ('DIVIDEND','TAX_WITHHOLDING')), 0),
                               coalesce(sum(t.cash_amount) filter (where t.txn_type in ('INTEREST','TAX_INTEREST')), 0),
@@ -345,6 +481,21 @@ def income_monthly(scope_key="all"):
         return {"months": [{"month": m, "dividends": a, "interest": b, "rewards": c, "fees": e} for m, a, b, c, e in cur.fetchall()]}
     finally:
         conn.close()
+
+
+def _income_monthly_in(cur, code, w):
+    """Dochody miesiecznie w walucie prezentacji: kazda operacja / kurs ze swojego dnia."""
+    from invapp.pricing import currency
+    r = currency.Rates(cur, w)
+    kind = {"DIVIDEND": "dividends", "TAX_WITHHOLDING": "dividends", "INTEREST": "interest", "TAX_INTEREST": "interest", "REWARD": "rewards", "FEE": "fees"}
+    months = {}
+    for typ, d, amt, _, _ in currency.income_txns(cur, _scope_accounts(cur, code)):
+        v = r.conv(amt, d)
+        if v is None:
+            continue
+        m = months.setdefault(d.strftime("%Y-%m"), {"month": d.strftime("%Y-%m"), "dividends": 0, "interest": 0, "rewards": 0, "fees": 0})
+        m[kind[typ]] += v
+    return {"months": [months[k] for k in sorted(months)], "waluta": w}
 
 
 def audit_data(scope_key="all"):

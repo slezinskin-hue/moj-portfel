@@ -13,8 +13,9 @@ Gotowka poza inwestycjami i ustawienia aplikacji (migracja 0017; decyzja uzytkow
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-DEFAULTS = {"include_cash": False, "include_xtb_free": False, "price_source": "YAHOO", "fx_source": "YAHOO"}
-ALLOWED = {"include_cash": (True, False), "include_xtb_free": (True, False), "price_source": ("YAHOO", "XTB_EXPORT"), "fx_source": ("YAHOO", "NBP")}
+DEFAULTS = {"include_cash": False, "include_xtb_free": False, "price_source": "YAHOO", "fx_source": "YAHOO", "display_currency": "PLN"}
+ALLOWED = {"include_cash": (True, False), "include_xtb_free": (True, False), "price_source": ("YAHOO", "XTB_EXPORT"), "fx_source": ("YAHOO", "NBP"),
+           "display_currency": ("PLN", "USD", "EUR", "GBP", "CHF")}     # waluta prezentacji (docs/WALUTA.md); PLN = bez zmian
 CURRENCIES = ("PLN", "EUR", "USD", "GBP", "CHF")
 CENT = Decimal("0.01")
 

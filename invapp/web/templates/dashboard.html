@@ -8,16 +8,17 @@
   <link rel="stylesheet" href="/static/app.css?v={{ static_v }}">
 </head>
 <body>
-<script id="boot" type="application/json">{{ {"scope": d.scope_key, "empty": d.empty, "has_data": d.has_data, "title": d.scope_title}|tojson }}</script>
+<script id="boot" type="application/json">{{ {"scope": d.scope_key, "empty": d.empty, "has_data": d.has_data, "title": d.scope_title, "waluta": d.waluta, "sym": d.sym}|tojson }}</script>
 
 <header class="top">
   <div class="top-in">
     <div class="brand"><span class="logo">↗</span>{{ app_name }}{% if d.dev %} <span class="badge warn" title="Uruchomiona z folderu z kodem: osobne dane testowe ({{ d.data_dir }}). Prawdziwe dane ma zainstalowana aplikacja.">wersja deweloperska</span>{% endif %}</div>
-    <nav class="seg" aria-label="Zakres portfela">
+    <label class="scope-pick" title="Który portfel pokazać: wszystkie konta razem albo jeden broker">Portfel
+      <select id="scope-sel" aria-label="Zakres portfela">
       {% for key in ['all'] + (d.tabs|map(attribute='key')|reject('equalto', 'all')|list) %}{% set t = (d.tabs|selectattr('key', 'equalto', key)|first) %}
-      <a class="{{ 'on' if t.key == d.scope_key else '' }}" href="/podglad?scope={{ t.key }}" title="{{ 'brak danych' if not t.has_data else '' }}">{{ t.title }}{% if not t.has_data %}<span class="dot"></span>{% endif %}</a>
+        <option value="{{ t.key }}" {{ 'selected' if t.key == d.scope_key else '' }}>{{ t.title }}{{ ' (brak danych)' if not t.has_data else '' }}</option>
       {% endfor %}
-    </nav>
+      </select></label>
     <span class="spacer"></span>
     <span id="audit-top" class="status"></span>
     <span id="status" class="status"><span class="led"></span><span>…</span></span>
@@ -30,8 +31,7 @@
   </div>
   {% if d.has_data %}
   <nav class="subnav">
-    <a class="vtab on" data-v="portfel" href="#/portfel">Portfel</a><a class="vtab" data-v="ekspozycja" href="#/ekspozycja">Ekspozycja</a><a class="vtab" data-v="gotowka" href="#/gotowka">Gotówka</a><a class="vtab" data-v="symulacje" href="#/symulacje">Symulacje</a>
-    <span class="secnav"><span class="sep"></span><a href="#przeglad">Przegląd</a><a href="#wykres">Wykres</a><a href="#pozycje">Pozycje</a><a href="#wskazniki">Wskaźniki</a><a href="#dochody">Dochody</a><a href="#szczegoly">Szczegóły i kontrola</a></span>
+    <a class="vtab on" data-v="portfel" href="#/portfel">Portfel</a><a class="vtab" data-v="analiza" href="#/analiza">Analiza</a><a class="vtab" data-v="dochody" href="#/dochody">Dochody</a><a class="vtab" data-v="ekspozycja" href="#/ekspozycja">Ekspozycja</a><a class="vtab" data-v="gotowka" href="#/gotowka">Gotówka</a><a class="vtab" data-v="symulacje" href="#/symulacje">Symulacje</a><a class="vtab" data-v="dane" href="#/dane">Dane</a>
     <span class="spacer"></span><span class="exp-btns"><button class="btn ghost" id="exp-xlsx" title="Pobierz arkusz Excel z pozycjami, historią, dochodami i wskaźnikami">⤓ Excel</button><button class="btn ghost" id="exp-pdf" title="Raport do druku lub zapisu jako PDF">⎙ PDF</button></span>
   </nav>
   {% endif %}
@@ -59,9 +59,12 @@
   <section id="przeglad">
     <div class="kpis">
       <div class="kpi hero"><div class="l" id="k-value-l">Wartość portfela</div><div class="v" id="k-value"><span class="skeleton"></span></div><div class="s" id="k-value-s"></div><div id="k-day" style="margin-top:6px"></div></div>
-      <div class="kpi"><div class="l">Zysk całkowity <span class="info" data-t="Zysk z inwestycji (niezrealizowany + zrealizowany) + dywidendy, odsetki, nagrody i opłaty Procent liczony od wpłaconych środków netto (wartość − zysk).">i</span></div><div class="v" id="k-total"><span class="skeleton"></span></div><div class="s" id="k-total-s"></div></div>
-      <div class="kpi"><div class="l">Zysk z inwestycji <span class="info" data-t="Niezrealizowany (wartość − koszt otwartych pozycji) + zrealizowany ze sprzedaży. Koszt = gotówka z księgi z opłatami (nie koszt podatkowy).">i</span></div><div class="v" id="k-inv"><span class="skeleton"></span></div><div class="s" id="k-inv-s"></div></div>
-      <div class="kpi"><div class="l">Dywidendy, odsetki i inne <span class="info" data-t="Kwoty netto z księgi (po podatku pobranym przez brokera) – tylko wypłacone.">i</span></div><div class="v" id="k-inc"><span class="skeleton"></span></div><div class="s" id="k-inc-s"></div></div>
+      <div class="kpi"><div class="l">Zysk <span class="info" data-t="Zysk całkowity: zmiana wartości otwartych pozycji + zysk ze sprzedaży + dywidendy, odsetki, nagrody i opłaty. Procent liczony od wpłaconych środków netto (wartość − zysk). Rozbicie pod przyciskiem.">i</span></div>
+        <div class="v" id="k-total"><span class="skeleton"></span></div><div class="s" id="k-total-s"></div>
+        <button class="linkbtn" id="k-gain-more" type="button" aria-expanded="false">Rozbicie zysku ▾</button>
+        <div id="k-gain-break" class="kbreak" hidden></div></div>
+      <div class="kpi"><div class="l">Dochody 12 mies. <span class="info" data-t="Dywidendy netto (po podatku pobranym przez brokera), odsetki netto i nagrody wypłacone w ostatnich 365 dniach. Szczegóły w zakładce „Dochody”.">i</span></div>
+        <div class="v" id="k-inc"><span class="skeleton"></span></div><div class="s" id="k-inc-s"></div><a class="linkbtn" href="#/dochody">Zobacz dochody →</a></div>
     </div>
     <p class="note" style="margin:-8px 2px 16px" id="price-note">Ładowanie cen…</p>
   </section>
@@ -83,70 +86,98 @@
     <div class="legend" id="legend"></div>
     <div class="chart-hint">Przybliżanie: zaznacz okres myszką, kółko myszy nad wykresem, suwak pod wykresem. Shift + przeciąganie przesuwa, podwójne kliknięcie pokazuje cały okres.</div>
     <p class="note" id="chart-note">Ładowanie historii…</p>
+    <p class="note" id="idx-note" style="display:none"></p>
   </section>
 
-  <div class="grid2 row-gap">
-    <section class="card">
-      <div class="card-h"><h2>Alokacja</h2><div class="chart-tools"><div class="seg" id="alloc-seg"><button data-k="pos" class="on">Pozycje</button><button data-k="acct">Konta</button><button data-k="broker">Broker</button><button data-k="ccy">Waluta</button></div></div></div>
-      <div id="alloc"></div>
-    </section>
-    <section class="card">
-      <div class="card-h"><h2>Obsunięcia</h2><span class="hint">spadek od szczytu (indeks TWR)</span></div>
-      <div id="under" style="min-height:150px"></div>
-      <h3 style="font-size:.9rem;margin:14px 0 6px">Zwrot w okresach (TWR)</h3>
-      <div id="met-windows"></div>
-    </section>
-  </div>
-
   <section class="card" id="deps" style="display:none">
-    <div class="card-h"><h2>Lokaty (gotówka oprocentowana)</h2></div>
+    <div class="card-h"><h2>Lokaty</h2><span class="hint">gotówka oprocentowana jak lokata (np. Trade Republic) – osobno od papierów i od gotówki</span></div>
     <div id="deps-body"></div>
   </section>
 
   <section class="card" id="pozycje">
-    <div class="card-h"><h2>Pozycje</h2><span class="hint">ilość × cena z Yahoo × kurs, w PLN · kliknij wiersz, aby zobaczyć szczegóły</span>
+    <div class="card-h"><h2>Pozycje</h2>
+      <div class="seg" id="pos-kind"><button data-k="open" class="on">Otwarte <span id="pos-n-open"></span></button><button data-k="closed">Zamknięte <span id="pos-n-closed"></span></button></div>
+      <span class="hint" id="pos-hint">ilość × cena z Yahoo × kurs, w {{ d.waluta }} · kliknij wiersz: szczegóły i wykres ceny</span>
       <div class="chart-tools"><input id="pos-q" class="search" type="search" placeholder="Szukaj (symbol, nazwa, konto)…"></div></div>
-    <div class="table-wrap"><table id="pos">
-      <thead><tr><th class="sort" data-k="ticker">Instrument</th><th class="sort" data-k="acct">Konto</th><th class="n sort" data-k="qty">Ilość</th><th class="n sort" data-k="price_pln">Cena</th>
-        <th class="n sort on" data-k="value">Wartość</th><th class="n sort" data-k="share">Udział</th><th class="n sort" data-k="cost_left">Koszt</th><th class="n sort" data-k="gain">Zysk</th><th class="n sort" data-k="gainp">Zysk %</th></tr></thead>
-      <tbody><tr><td colspan="9"><span class="skeleton"></span></td></tr></tbody><tfoot></tfoot>
+    <div class="table-wrap" id="pos-open"><table id="pos">
+      <thead><tr><th class="sort" data-k="ticker">Instrument</th><th class="sort" data-k="acct">Konto</th><th class="n sort" data-k="qty">Ilość</th>
+        <th class="n sort" data-k="price_pln" title="Aktualna cena 1 szt. w {{ d.waluta }} (cena z giełdy × kurs)">Cena</th>
+        <th class="n sort" data-k="avg_cost" title="Średni koszt zakupu 1 szt. w {{ d.waluta }}: koszt otwartych pozycji (z prowizjami, po kursie z dnia zakupu) / ilość">Śr. koszt</th>
+        <th class="n sort on" data-k="value">Wartość</th>
+        <th class="n sort" data-k="day_change" id="th-day" title="Zmiana od wczorajszego zamknięcia: obecna ilość × (cena teraz − cena zamknięcia), w PLN z kursem walut">Dziś</th>
+        <th class="n sort" data-k="share">Udział</th><th class="n sort" data-k="cost_left">Koszt</th><th class="n sort" data-k="gain">Zysk</th><th class="n sort" data-k="gainp">Zysk %</th></tr></thead>
+      <tbody><tr><td colspan="11"><span class="skeleton"></span></td></tr></tbody><tfoot></tfoot>
     </table></div>
+    <div class="table-wrap" id="pos-closed" hidden><table id="closed">
+      <thead><tr><th>Instrument</th><th>Konto</th><th>Pierwszy zakup</th><th>Ostatnia sprzedaż</th><th class="n">Sprzedano szt.</th><th class="n">Koszt</th><th class="n">Przychód</th><th class="n">Zysk</th><th class="n">Zysk %</th><th>Stan</th></tr></thead>
+      <tbody></tbody><tfoot></tfoot>
+    </table>
+    <p class="note">Zysk zrealizowany ze sprzedaży: przychód − koszt sprzedanych części (gotówka z księgi, z prowizjami). Suma zgadza się z zyskiem zrealizowanym w rozbiciu zysku (kontrola liczb). Dywidendy są osobno, w zakładce „Dochody”.</p></div>
   </section>
+  </div>
 
+  <div class="view" data-view="analiza" hidden>
   <section class="card" id="wskazniki">
     <div class="card-h"><h2>Wskaźniki inwestora</h2><span class="hint" id="met-note">Ładowanie…</span></div>
     <div class="mgrid" id="met-tiles"></div>
-    <div class="grid2" style="margin-top:16px">
+  </section>
+
+  <section class="card" id="heat-card">
+    <div class="card-h"><h2>Mapa miesięcznych zwrotów</h2><span class="hint">stopa zwrotu TWR w każdym miesiącu (bez wpływu wpłat i wypłat) · ostatnia kolumna: cały rok</span></div>
+    <div class="table-wrap"><table class="heat" id="heat"><thead></thead><tbody></tbody></table></div>
+    <p class="note">Iloczyn miesięcy daje wynik roku (ten sam co w tabeli „Rok do roku”). Pierwszy i bieżący miesiąc mogą być niepełne.</p>
+  </section>
+
+  <div class="grid2 row-gap">
+    <section class="card">
+      <div class="card-h"><h2>Obsunięcia</h2><span class="hint">spadek od szczytu (indeks TWR)</span></div>
+      <div id="under" style="min-height:170px"></div>
+    </section>
+    <section class="card">
+      <div class="card-h"><h2>Zwrot w okresach (TWR)</h2></div>
+      <div id="met-windows"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="grid2">
       <div><h3 style="font-size:.9rem;margin:0 0 6px">Rok do roku</h3><div class="table-wrap"><table id="met-years"><thead><tr><th>Rok</th><th class="n">Początek</th><th class="n">Wpłaty netto</th><th class="n">Koniec</th><th class="n">Zysk</th><th class="n">TWR</th></tr></thead><tbody></tbody></table></div></div>
       <div><h3 style="font-size:.9rem;margin:0 0 6px">Największe obsunięcia</h3><div class="table-wrap"><table id="met-episodes"><thead><tr><th>Szczyt</th><th>Dołek</th><th class="n">Spadek</th><th class="n">Zmiana zysku</th><th>Powrót</th></tr></thead><tbody></tbody></table></div>
         <p class="note">Ten sam procent spadku oznacza dziś większą kwotę niż wtedy, gdy portfel był mały – stąd obok zmiana zysku w złotych.</p></div>
     </div>
+    <h3 style="font-size:.9rem;margin:16px 0 6px">Ryzyko</h3>
+    <div class="mgrid" id="met-risk"></div>
   </section>
+  </div>
 
+  <div class="view" data-view="dochody" hidden>
   <section class="card" id="dochody">
     <div class="card-h"><h2>Dywidendy i inne dochody</h2><div class="chart-tools"><button class="btn ghost" id="inc-all">Cały okres</button></div></div>
+    <div class="mgrid" id="inc-tiles" style="margin-bottom:14px"></div>
     <div id="inc-chart" style="min-height:230px"></div>
     <p class="note" id="inc-note"></p>
-    <details style="margin-top:10px"><summary class="muted" style="cursor:pointer;font-weight:600">Tabele: według roku, instrumentu i ostatnie wypłaty</summary>
-      <div class="grid2" style="margin-top:10px">
-        <div class="table-wrap"><table><thead><tr><th>Rok</th><th class="n">Dyw. brutto</th><th class="n">Podatek</th><th class="n">Dyw. netto</th><th class="n">Odsetki netto</th><th class="n">Opłaty i inne</th></tr></thead><tbody>
-        {% for y in d.income_by_year %}<tr><td>{{ y.year }}</td><td class="n">{{ y.dividends_gross|pln }}</td><td class="n">{{ y.withholding_tax|pln }}</td><td class="n">{{ y.dividends_net|pln }}</td><td class="n">{{ y.interest_net|pln }}</td><td class="n">{{ y.other|pln }}</td></tr>{% endfor %}
-        </tbody></table></div>
-        <div class="table-wrap"><table><thead><tr><th>Symbol</th><th class="n">Wypłat</th><th class="n">Netto</th><th>Ostatnia</th></tr></thead><tbody>
-        {% for r in d.dividends_by_instrument %}<tr><td><span class="tick">{{ r.ticker }}</span><span class="inst">{{ r.instrument }}</span></td><td class="n">{{ r.payments }}</td><td class="n">{{ r.net|pln }}</td><td>{{ r.last_payment.strftime('%Y-%m-%d') if r.last_payment else '—' }}</td></tr>{% endfor %}
-        </tbody></table></div>
-      </div>
-      <h3 style="font-size:.9rem;margin:14px 0 6px">Ostatnie wypłaty dywidend</h3>
-      <div class="table-wrap"><table><thead><tr><th>Data</th><th>Konto</th><th>Symbol</th><th class="n">Brutto</th><th class="n">Podatek</th><th class="n">Netto</th></tr></thead><tbody>
-      {% for r in d.recent_dividends %}<tr><td>{{ r.occurred_at.strftime('%Y-%m-%d') }}</td><td>{{ r.account }}</td><td>{{ r.ticker }}</td><td class="n">{{ r.gross|pln }}</td><td class="n">{{ r.tax|pln }}</td><td class="n">{{ r.net|pln }}</td></tr>{% endfor %}
-      </tbody></table></div>
-      <p class="note">Kwoty w PLN po przeliczeniu przez brokera, po podatkach pobranych u źródła. Pozycje ujemne to korekty dywidend.</p>
-    </details>
   </section>
+  <section class="card">
+    <div class="grid2">
+      <div><h3 style="font-size:.9rem;margin:0 0 6px">Według roku</h3><div class="table-wrap"><table><thead><tr><th>Rok</th><th class="n">Dyw. brutto</th><th class="n">Podatek</th><th class="n">Dyw. netto</th><th class="n">Odsetki netto</th><th class="n">Opłaty i inne</th></tr></thead><tbody>
+      {% for y in d.income_by_year %}<tr><td>{{ y.year }}</td><td class="n">{{ y.dividends_gross|pln(2, ' ' ~ d.sym) }}</td><td class="n">{{ y.withholding_tax|pln(2, ' ' ~ d.sym) }}</td><td class="n">{{ y.dividends_net|pln(2, ' ' ~ d.sym) }}</td><td class="n">{{ y.interest_net|pln(2, ' ' ~ d.sym) }}</td><td class="n">{{ y.other|pln(2, ' ' ~ d.sym) }}</td></tr>{% endfor %}
+      </tbody></table></div></div>
+      <div><h3 style="font-size:.9rem;margin:0 0 6px">Według spółki</h3><div class="table-wrap"><table><thead><tr><th>Symbol</th><th class="n">Wypłat</th><th class="n">Netto</th><th>Ostatnia</th></tr></thead><tbody>
+      {% for r in d.dividends_by_instrument %}<tr><td><span class="tick">{{ r.ticker }}</span><span class="inst">{{ r.instrument }}</span></td><td class="n">{{ r.payments }}</td><td class="n">{{ r.net|pln(2, ' ' ~ d.sym) }}</td><td>{{ r.last_payment.strftime('%Y-%m-%d') if r.last_payment else '—' }}</td></tr>{% endfor %}
+      </tbody></table></div></div>
+    </div>
+    <h3 style="font-size:.9rem;margin:14px 0 6px">Ostatnie wypłaty dywidend</h3>
+    <div class="table-wrap"><table><thead><tr><th>Data</th><th>Konto</th><th>Symbol</th><th class="n">Brutto</th><th class="n">Podatek</th><th class="n">Netto</th></tr></thead><tbody>
+    {% for r in d.recent_dividends %}<tr><td>{{ r.occurred_at.strftime('%Y-%m-%d') }}</td><td>{{ r.account }}</td><td>{{ r.ticker }}</td><td class="n">{{ r.gross|pln(2, ' ' ~ d.sym) }}</td><td class="n">{{ r.tax|pln(2, ' ' ~ d.sym) }}</td><td class="n">{{ r.net|pln(2, ' ' ~ d.sym) }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    <p class="note">Kwoty w PLN po przeliczeniu przez brokera, po podatkach pobranych u źródła{% if d.waluta != 'PLN' %} – tu w {{ d.waluta }}: każda wypłata po kursie z dnia wypłaty{% endif %}. Pozycje ujemne to korekty dywidend.</p>
+  </section>
+  </div>
 
-  <h2 id="szczegoly" style="font-size:1rem;margin:26px 2px 10px">Szczegóły i kontrola</h2>
-  <details class="sec" id="sec-audit"><summary>Kontrola liczb <span id="audit-badge"></span></summary><div class="body">
-    <p class="note" style="margin-top:0">Wartość każdej pozycji jest liczona niezależnie z tabel bazowych (partie × notowanie × kurs) i porównywana z liczbą na stronie; sprawdzane są też tożsamości księgowe, lokaty (model odsetek kontra wypłaty z eksportu) i ilości z raportem XTB.</p>
+  <div class="view" data-view="dane" hidden>
+  <h2 id="szczegoly" style="font-size:1rem;margin:4px 2px 10px">Dane i kontrola liczb</h2>
+  <details class="sec" id="sec-audit" open><summary>Kontrola liczb <span id="audit-badge"></span></summary><div class="body">
+    <p class="note" style="margin-top:0">Wartość każdej pozycji jest liczona niezależnie z tabel bazowych (partie × notowanie × kurs) i porównywana z liczbą na stronie; sprawdzane są też tożsamości księgowe, zamknięte pozycje, lokaty (model odsetek kontra wypłaty z eksportu) i ilości z raportem XTB.</p>
     <div class="table-wrap"><table id="audit"><thead><tr><th>Kontrola</th><th>Wynik</th><th>Szczegóły</th></tr></thead><tbody></tbody></table></div>
   </div></details>
 
@@ -196,28 +227,30 @@
     {% else %}<p class="muted">Brak.</p>{% endif %}
   </div></details>
 
-  <details class="sec"><summary>Jak liczone są liczby</summary><div class="body note" style="font-size:.86rem">
+  <details class="sec" id="sec-how"><summary>Jak liczone są liczby</summary><div class="body note" style="font-size:.86rem">
     <p><b>Wartość portfela</b> = suma pozycji: <b>ilość × aktualna cena z Yahoo × kurs waluty</b> (kurs z API: Yahoo, a gdy go brak – NBP), plus <b>lokaty</b> (saldo gotówki oprocentowanej z eksportu – tylko kwoty zaksięgowane, bez odsetek jeszcze niewypłaconych). Wolne środki bez oprocentowania nie są liczone.</p>
-    <p><b>Zysk z inwestycji</b> = niezrealizowany (wartość − koszt pozostałych pozycji) + zrealizowany ze sprzedaży. <b>Dywidendy, odsetki, nagrody i opłaty</b> są osobno; razem z zyskiem z inwestycji dają <b>zysk całkowity</b>. Koszt to gotówka z księgi (z opłatami), nie koszt podatkowy.</p>
+    <p><b>Zysk</b> (całkowity) = zmiana wartości otwartych pozycji (wartość − koszt) + zysk zrealizowany ze sprzedaży + <b>dywidendy, odsetki, nagrody i opłaty</b>. Koszt to gotówka z księgi (z opłatami), nie koszt podatkowy. <b>Dochody 12 mies.</b> = dywidendy netto, odsetki netto i nagrody z ostatnich 365 dni.</p>
+    <p><b>Pozycje</b>: <b>Śr. koszt</b> = koszt pozycji / ilość (PLN za sztukę, z prowizjami, po kursie z dnia zakupu). <b>Dziś</b> = obecna ilość × (cena teraz − cena zamknięcia z wczoraj), obie w PLN z kursem walut – ta sama cena wczorajsza co na wykresie portfela; w dni bez sesji zmiana dotyczy tylko kursu walut. Zmiana dzienna całego portfela (kafelek „Wartość”) obejmuje też lokaty i dzisiejsze zakupy oraz sprzedaże, więc nie musi być równa sumie kolumny. <b>Zamknięte</b>: sprzedaże pogrupowane po instrumencie (przychód − koszt sprzedanych części).</p>
     <p><b>Wykres i wskaźniki</b>: dla kont bez lokaty wpłata = zakup, wypłata = sprzedaż; dla konta z lokatą wpłata = przelew na konto, wypłata = przelew z konta, a odsetki są zwrotem. Dywidendy i nagrody są dochodem dodatkowym (poza wykresem). Wartość historyczna = ilość × cena zamknięcia dnia × kurs dnia (ceny skorygowane o splity); dni bez ceny są oznaczone jako oszacowane.</p>
-    <p><b>TWR</b> łączy dzienne stopy zwrotu niezależnie od wpłat; <b>XIRR</b> to roczna stopa uwzględniająca moment i wielkość wpłat (Twój faktyczny wynik); <b>obsunięcie</b> to spadek indeksu TWR od szczytu.</p>
-    <p><b>Gotówka</b> (konta bankowe wpisane ręcznie, wolne środki XTB) jest doliczana tylko do bieżącej wartości portfela i tylko po włączeniu w zakładce „Gotówka”; zysk, wpłaty, wykresy i wskaźniki jej nie obejmują.</p>
+    <p><b>TWR</b> łączy dzienne stopy zwrotu niezależnie od wpłat; <b>mapa miesięcznych zwrotów</b> to TWR każdego miesiąca; <b>XIRR</b> to roczna stopa uwzględniająca moment i wielkość wpłat (Twój faktyczny wynik); <b>obsunięcie</b> to spadek indeksu TWR od szczytu.</p>
+    <p><b>Gotówka</b> (konta bankowe wpisane ręcznie, wolne środki XTB) jest doliczana tylko do bieżącej wartości portfela i tylko po włączeniu w zakładce „Gotówka”; zysk, wpłaty, wykresy i wskaźniki jej nie obejmują. <b>Lokaty</b> (np. gotówka oprocentowana w Trade Republic) są osobną częścią portfela, zawsze w jego wartości.</p>
   </div></details>
   </div>
 
   <div class="view" data-view="gotowka" hidden>
     <section class="card">
-      <div class="card-h"><h2>Gotówka</h2><span class="hint">konta bankowe wpisujesz sam · wolne środki i lokaty biorą się z eksportów brokerów · wspólne dla wszystkich zakładek</span></div>
+      <div class="card-h"><h2>Gotówka</h2><span class="hint">konta bankowe wpisujesz sam · wolne środki biorą się z eksportów brokerów · wspólne dla wszystkich portfeli</span></div>
       <div class="mgrid" id="cash-tiles"></div>
       <div class="settings">
-        <label class="check"><input type="checkbox" data-set="include_cash"> <span><b>Uwzględniaj gotówkę z kont bankowych</b> w wartości portfela <span class="muted">(zakładka WSZYSTKIE)</span></span></label>
-        <label class="check"><input type="checkbox" data-set="include_xtb_free"> <span><b>Uwzględniaj wolne środki XTB</b> w wartości portfela <span class="muted">(zakładki XTB i WSZYSTKIE)</span></span></label>
-        <p class="note">Doliczana jest tylko <b>bieżąca wartość portfela</b> (kafelek „Wartość” i alokacja). Zysk, wpłaty, wykres i wskaźniki zostają bez zmian – gotówka nie jest inwestycją, a dopisanie jej do historii wyglądałoby jak zysk.</p>
+        <label class="check"><input type="checkbox" data-set="include_cash"> <span><b>Uwzględniaj gotówkę z kont bankowych</b> w wartości portfela <span class="muted">(portfel WSZYSTKIE)</span></span></label>
+        <label class="check"><input type="checkbox" data-set="include_xtb_free"> <span><b>Uwzględniaj wolne środki XTB</b> w wartości portfela <span class="muted">(portfele XTB i WSZYSTKIE)</span></span></label>
+        <p class="note">Doliczana jest tylko <b>bieżąca wartość portfela</b> (kafelek „Wartość” i alokacja). Zysk, wpłaty, wykres i wskaźniki zostają bez zmian – gotówka nie jest inwestycją, a dopisanie jej do historii wyglądałoby jak zysk.
+          <b>Lokaty</b> (gotówka oprocentowana, np. w Trade Republic) nie są tu liczone – są osobną częścią portfela, na stronie „Portfel”.</p>
       </div>
     </section>
     <section class="card">
       <div class="card-h"><h2>Konta bankowe</h2><span class="hint">saldo wpisujesz ręcznie (np. raz w miesiącu); bez numerów kont</span></div>
-      <div class="table-wrap"><table id="cash-acc"><thead><tr><th>Konto</th><th>Waluta</th><th class="n">Saldo</th><th>Na dzień</th><th class="n">Wartość w PLN</th><th></th></tr></thead><tbody></tbody></table></div>
+      <div class="table-wrap"><table id="cash-acc"><thead><tr><th>Konto</th><th>Waluta</th><th class="n">Saldo</th><th>Na dzień</th><th class="n">Wartość w {{ d.waluta }}</th><th></th></tr></thead><tbody></tbody></table></div>
       <form id="cash-add" class="iform" autocomplete="off">
         <label>Nazwa konta<input name="nazwa" maxlength="80" placeholder="np. mBank – konto osobiste" required></label>
         <label>Waluta<select name="waluta"></select></label>
@@ -227,14 +260,18 @@
       </form>
     </section>
     <section class="card">
-      <div class="card-h"><h2>Gotówka u brokerów</h2><span class="hint">z eksportów (saldo gotówki z księgi)</span></div>
+      <div class="card-h"><h2>Wolne środki u brokerów</h2><span class="hint">z eksportów (saldo gotówki z księgi, bez oprocentowania)</span></div>
       <div class="table-wrap"><table id="cash-brk"><thead><tr><th>Konto</th><th>Rodzaj</th><th class="n">Saldo</th><th>Jak liczone</th></tr></thead><tbody></tbody></table></div>
     </section>
   </div>
 
   <div class="view" data-view="ekspozycja" hidden>
     <section class="card">
-      <div class="card-h"><h2>Ekspozycja portfela</h2><span class="hint" id="exp-note">podział wartości papierów (bez lokat i gotówki)</span></div>
+      <div class="card-h"><h2>Alokacja</h2><span class="hint">podział całej wartości portfela: papiery, lokaty i (gdy włączona) gotówka</span></div>
+      <div class="exp-grid"><div><h3>Według kont</h3><div id="alloc-acct"></div></div><div><h3>Według brokera</h3><div id="alloc-broker"></div></div></div>
+    </section>
+    <section class="card">
+      <div class="card-h"><h2>Ekspozycja papierów</h2><span class="hint" id="exp-note">podział wartości papierów (bez lokat i gotówki)</span></div>
       <div class="exp-grid" id="exp-grid"></div>
     </section>
   </div>
@@ -299,6 +336,11 @@
     <label class="check"><input type="radio" name="fx_source" value="YAHOO"> <span><b>Rynkowy na żywo (Yahoo)</b> (domyślnie), bez marży brokera.</span></label>
     <label class="check"><input type="radio" name="fx_source" value="NBP"> <span><b>Średni kurs NBP</b> (tabela A, raz dziennie).</span></label>
     <p class="note">Dlaczego XTB pokazuje trochę inną wartość? XTB wycenia pozycje po swojej cenie sprzedaży (bid) i swoim kursie walut (z marżą), a Yahoo podaje ostatnią cenę transakcyjną i kurs rynkowy – zwykle to różnica rzędu 0,1–0,5%. XTB nie udostępnia publicznie cen na żywo, dlatego „ceny XTB” pochodzą z eksportu. Ustawienie zmienia tylko bieżącą wycenę (wartość, zysk niezrealizowany); historia na wykresie zawsze używa cen zamknięcia z Yahoo.</p>
+    <h3 class="set-h">Waluta prezentacji</h3>
+    <div class="radios">{% for w in ['PLN', 'USD', 'EUR', 'GBP', 'CHF'] %}<label class="check inline"><input type="radio" name="display_currency" value="{{ w }}"> <span><b>{{ w }}</b>{{ ' (domyślnie)' if w == 'PLN' else '' }}</span></label>{% endfor %}</div>
+    <p class="note">Inna waluta niż PLN: wszystko liczone tak, jak liczyłby inwestor rozliczający się w tej walucie – każdy zakup, sprzedaż, dywidenda i opłata
+      po kursie z jej dnia, wartość dziś po kursie bieżącym. Wynik różni się od wyniku w złotych o zmianę kursu złotego (np. akcja za 400 zł przy 4,00 zł/$
+      warta dziś 396 zł przy 3,60 zł/$: w PLN −1%, w USD +10%). Księga i eksport do Excela zostają w PLN.</p>
     <h3 class="set-h">Gotówka w wartości portfela</h3>
     <label class="check"><input type="checkbox" data-set="include_cash"> <span>Uwzględniaj gotówkę z kont bankowych <span class="muted">(zakładka „Gotówka”)</span></span></label>
     <label class="check"><input type="checkbox" data-set="include_xtb_free"> <span>Uwzględniaj wolne środki XTB</span></label>

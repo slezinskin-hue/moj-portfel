@@ -1,6 +1,7 @@
 /* Wykresy aplikacji (SVG, bez zewnetrznych bibliotek - dziala offline):
  *  TimeChart - szereg czasowy z przyblizaniem: zaznacz zakres myszka (przeciagnij), kolko myszy = przyblizenie wokol kursora,
- *              Shift + przeciaganie = przesuwanie, podwojne klikniecie = caly okres, suwak (nawigator) pod wykresem.
+ *              Shift + przeciaganie = przesuwanie, podwojne klikniecie = caly okres, suwak (nawigator) pod wykresem;
+ *              opcja markers: [{t, v, kind: 'buy'|'sell'}] - znaczniki transakcji.
  *  donut     - wykres pierscieniowy (alokacja) z legenda i podswietleniem.
  *  bars      - slupki miesieczne (warstwowe, z wartosciami ujemnymi ponizej osi).
  */
@@ -130,6 +131,13 @@
           el('path', {d: area, fill: `url(#${gid})`}, plot);
         }
         el('path', {d: dpath, style: `fill:none;stroke:${s.color};stroke-width:${s.width || 2};stroke-linejoin:round` + (s.dash ? ';stroke-dasharray:5 4' : '')}, plot);
+      }
+      // znaczniki (np. kupno / sprzedaz na wykresie pozycji): trojkat pod linia (kupno, w gore) albo nad linia (sprzedaz, w dol)
+      for (const m of this.o.markers || []) {
+        if (m.t < t0 || m.t > t1 || m.v === null || m.v === undefined) continue;
+        const X = x(m.t), Y = y(m.v), sell = m.kind === 'sell';
+        el('path', {d: sell ? `M${X - 6},${Y - 13}L${X + 6},${Y - 13}L${X},${Y - 3}Z` : `M${X - 6},${Y + 13}L${X + 6},${Y + 13}L${X},${Y + 3}Z`,
+                    style: `fill:var(--${sell ? 'neg' : 'pos'});stroke:var(--card);stroke-width:1`}, plot);
       }
       this.cross = el('g', {style: 'display:none'}, svg);
       el('line', {y1: T, y2: plotB, style: 'stroke:var(--muted);stroke-dasharray:3 3'}, this.cross);

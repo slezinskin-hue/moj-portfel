@@ -278,6 +278,24 @@ def api_income(scope: str = "all"):
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
 
 
+@app.get("/api/zamkniete")
+def api_closed(scope: str = "all"):
+    """Zamkniete pozycje: sprzedaze z zyskiem zrealizowanym, pogrupowane po instrumencie. Tylko odczyt."""
+    try:
+        return JSONResponse(_jsonable(preview.closed_data(scope)))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"blad": type(e).__name__}, status_code=503)
+
+
+@app.get("/api/pozycja")
+def api_position(listing: int, scope: str = "all"):
+    """Wykres pozycji: ceny dzienne i transakcje kupna/sprzedazy. Tylko odczyt."""
+    try:
+        return JSONResponse(_jsonable(preview.position_data(scope, listing)))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"blad": type(e).__name__}, status_code=503)
+
+
 @app.get("/api/kontrola")
 def api_audit(scope: str = "all"):
     """Kontrola poprawnosci liczb: wartosc = ilosc x cena z API x kurs (przeliczone niezaleznie) i tozsamosci ksiegowe. Tylko odczyt."""
@@ -457,7 +475,17 @@ async def api_cash_archive(aid: int, request: Request):
 @app.post("/api/ustawienia")
 async def api_settings(request: Request):
     from invapp.core import cash
-    return await owner_write(request, lambda cur, b: {"ustawienia": cash.set_setting(cur, str(b.get("klucz")), b.get("wartosc"))})
+    keys = []
+
+    def save(cur, b):
+        keys.append(str(b.get("klucz")))
+        return {"ustawienia": cash.set_setting(cur, keys[0], b.get("wartosc"))}
+    res = await owner_write(request, save)
+    if res.status_code == 200:
+        preview.invalidate_caches()
+        if keys == ["display_currency"]:
+            importing.start_background_pricing()             # nowa waluta prezentacji: kursy dzienne i na zywo w tle
+    return res
 
 
 @app.post("/api/ceny/odswiez")

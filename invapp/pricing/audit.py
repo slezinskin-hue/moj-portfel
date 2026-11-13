@@ -116,10 +116,20 @@ def run(conn, scope_code, brokers=("XTB", "TR")):
         f"{(purchases - cost_sold).quantize(TOL)} vs {_dec(s['securities_cost']).quantize(TOL)}")
     add("Zrealizowany zysk = przychód ze sprzedaży − koszt sprzedanych części", abs((sales - cost_sold) - realized) <= TOL and abs(realized - _dec(s["realized_gain"])) <= TOL,
         f"{(sales - cost_sold).quantize(TOL)} vs {realized.quantize(TOL)}")
+    from invapp.pricing import positions as pos_calc
+    closed = pos_calc.closed_positions(cur, accounts)
+    closed_sum = sum((c["realized"] for c in closed), D(0))
+    closed_bad = [c["ticker"] or c["instrument"] for c in closed if abs(c["proceeds"] - c["cost"] - c["realized"]) > TOL]
+    add("Zamknięte pozycje: suma zysku zrealizowanego = zysk zrealizowany (kafelek), każda = przychód − koszt",
+        abs(closed_sum - _dec(s["realized_gain"])) <= TOL and not closed_bad,
+        f"{closed_sum.quantize(TOL)} vs {_dec(s['realized_gain']).quantize(TOL)} ({len(closed)} instrumentów)" + (("; niezgodne: " + ", ".join(closed_bad)) if closed_bad else ""))
     add("Zysk z inwestycji = niezrealizowany + zrealizowany", abs(_dec(s["unrealized_gain"]) + _dec(s["realized_gain"]) - _dec(s["investment_gain"])) <= TOL)
     add("Zysk całkowity = zysk z inwestycji + dywidendy, odsetki, nagrody i opłaty",
         abs(_dec(s["investment_gain"]) + _dec(s["additional_income"]) - _dec(s["total_result"])) <= TOL,
         f"{_dec(s['investment_gain']).quantize(TOL)} + {_dec(s['additional_income']).quantize(TOL)} = {_dec(s['total_result']).quantize(TOL)}")
+
+    # 2a. waluta prezentacji (docs/WALUTA.md): niezalezne przeliczenie w SQL i tozsamosci w tej walucie
+    _currency_checks(cur, accounts, s, st, add)
 
     # 3. zakres laczny = suma brokerow (wszystkich z rejestru invapp/brokers)
     if scope_code == "INVESTMENT_ALL":
@@ -196,3 +206,56 @@ def _deposit_checks(cur, scope_code, accounts, add):
         parts = sum((dep.scope_deposits(cur, b.scope_code)["value"] for b in _brokers()), D(0))
         add(f"WSZYSTKIE = {_names()}: lokaty", abs(parts - sd["value"]) <= TOL, f"{parts.quantize(TOL)} vs {_dec(sd['value']).quantize(TOL)}")
     return sd["value"]
+
+
+def _currency_checks(cur, accounts, s, st, add):
+    """Tylko gdy waluta prezentacji != PLN. Kurs dnia w SQL (YAHOO_1D, nie starszy niz 7 dni) - inna droga niz pricing/currency.py (Python)."""
+    w = st.get("display_currency", "PLN")
+    if w == "PLN":
+        return
+    from invapp.pricing import currency
+    k = currency.live_rate(cur, w)
+    if k is None:
+        add(f"Waluta {w}: kurs bieżący dostępny", False, "brak kursu – kwoty w tej walucie są niepełne", "OSTRZEZENIE")
+        return
+    rate = lambda d: (f"(select r.rate from fx_rates r where r.source = 'YAHOO_1D' and r.base = %(w)s and r.quote = 'PLN' "  # noqa: E731
+                      f"and r.rate_date <= {d} and r.rate_date > {d} - 8 order by r.rate_date desc limit 1)")
+    buy_d = "(dl.opened_at at time zone 'UTC')::date"
+    cur.execute(f"""select coalesce(sum(dl.cost_cash_initial / {rate(buy_d)}), 0),
+                           coalesce(sum((dl.cost_cash_initial - coalesce((select sum(c.cost_cash) from derived_lot_closures c where c.lot_id = dl.lot_id), 0))
+                                        / {rate(buy_d)}), 0),
+                           count(*) filter (where {rate(buy_d)} is null)
+                    from derived_lots dl where dl.account_id = any(%(a)s)""", {"w": w, "a": list(accounts)})
+    purchases, cost_left, miss1 = cur.fetchone()
+    sell_d = "(t.occurred_at at time zone 'UTC')::date"
+    cur.execute(f"""select coalesce(sum(c.proceeds_cash / {rate(sell_d)}), 0), coalesce(sum(c.cost_cash / {rate(buy_d)}), 0),
+                           count(*) filter (where {rate(sell_d)} is null or {rate(buy_d)} is null)
+                    from derived_lot_closures c join derived_lots dl on dl.lot_id = c.lot_id join transactions t on t.txn_id = c.sell_txn_id
+                    where dl.account_id = any(%(a)s)""", {"w": w, "a": list(accounts)})
+    sales, cost_sold, miss2 = cur.fetchone()
+    cur.execute(f"""select coalesce(sum(t.cash_amount / {rate(sell_d)}), 0), count(*) filter (where {rate(sell_d)} is null)
+                    from transactions t where t.status = 'ACTIVE' and t.cash_currency = 'PLN' and t.account_id = any(%(a)s)
+                      and t.txn_type in ('DIVIDEND','TAX_WITHHOLDING','INTEREST','TAX_INTEREST','REWARD','FEE')""", {"w": w, "a": list(accounts)})
+    income, miss3 = cur.fetchone()
+    purchases, cost_left, sales, cost_sold, income = (_dec(x) for x in (purchases, cost_left, sales, cost_sold, income))
+    realized = sales - cost_sold
+    r = currency.Rates(cur, w)
+    lots = currency.lots_in(cur, accounts, r).values()
+    inc = currency.income_in(cur, accounts, r)
+    app = {"purchases": sum((x["purchases"] for x in lots), D(0)), "cost_left": sum((x["cost_left"] for x in lots), D(0)),
+           "sales": sum((x["sales"] for x in lots), D(0)), "realized": sum((x["realized"] for x in lots), D(0))}
+    app_income = sum((v for key, v in inc.items() if key != "missing"), D(0))
+    missing = miss1 + miss2 + miss3
+    level = "OSTRZEZENIE" if missing else "BLAD"
+    note = f" · operacji bez kursu z ich dnia: {missing}" if missing else ""
+    diffs = [f"{n} {v.quantize(TOL)} vs {app[n].quantize(TOL)}" for n, v in (("purchases", purchases), ("cost_left", cost_left), ("sales", sales), ("realized", realized))
+             if abs(v - app[n]) > TOL]
+    add(f"Waluta {w}: zakupy, koszt otwartych pozycji, sprzedaże i zysk zrealizowany po kursie z dnia operacji (SQL) = przeliczenie aplikacji",
+        not diffs and not missing, ("; ".join(diffs) or f"koszt {cost_left.quantize(TOL)} {w}, zrealizowany {realized.quantize(TOL)} {w}") + note, level)
+    value = _dec(s["securities_value"]) / k
+    gain_app = (value - app["cost_left"]) + app["realized"]
+    add(f"Waluta {w}: zysk z inwestycji = wartość − (zakupy − sprzedaże), wartość po kursie teraz {k.quantize(D('0.0001'))}",
+        abs(gain_app - (value - (purchases - sales))) <= TOL and not missing,
+        f"{gain_app.quantize(TOL)} vs {(value - (purchases - sales)).quantize(TOL)} {w}" + note, level)
+    add(f"Waluta {w}: dywidendy, odsetki, nagrody i opłaty po kursie z dnia wypłaty (SQL) = przeliczenie aplikacji",
+        abs(income - app_income) <= TOL and not missing, f"{income.quantize(TOL)} vs {app_income.quantize(TOL)} {w}" + note, level)

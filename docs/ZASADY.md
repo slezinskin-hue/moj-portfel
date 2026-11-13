@@ -7,9 +7,8 @@ Wynikają z decyzji właściciela projektu i są pilnowane testami. Jeśli zmian
 
 1. **Liczby muszą się zgadzać co do grosza.** Wartość portfela = ilość × aktualna cena z API (Yahoo) × kurs, w PLN. Każda nowa liczba
    na stronie ma niezależną kontrolę w `pricing/audit.py` albo test, który ją przelicza inną drogą.
-   *Rozszerzenie (planowane, do decyzji sposobu): waluta prezentacji w ustawieniach – USD, EUR, GBP, CHF i inne popularne. Księga, wycena
-   i kontrole dalej liczone w PLN (waluta księgi); na stronie kwoty × kurs PLN → wybrana waluta (z tego samego źródła kursów co wycena),
-   z podpisem waluty i kursu. Każda pokazana kwota musi dać się odtworzyć: kwota w PLN × pokazany kurs.*
+   **Waluta prezentacji** (od 0.4.0, decyzja 2026-11-13 – pełne liczenie w walucie, `docs/WALUTA.md`): księga, partie i kontrole PLN bez zmian;
+   przy innej walucie każdy przepływ po kursie z jego dnia, wartość po kursie teraz; kontrola liczb sprawdza wtedy dodatkowo tożsamości w tej walucie.
 2. **Zmiana logiki finansowej = opis przyczyny i wpływu przed zmianą.** W migracji: nagłówek `WPLYW NA WYNIKI:` (co się zmieni w liczbach
    i dlaczego); w kodzie: komentarz z datą decyzji. Ustawienia, które zmieniają liczby, są domyślnie wyłączone.
 3. **Nie zgadujemy.** Waluta i giełda instrumentu nie wynikają z sufiksu symbolu (`.PL`, `.UK`); nieznany typ operacji = `UNMAPPED`;
@@ -30,6 +29,10 @@ Wynikają z decyzji właściciela projektu i są pilnowane testami. Jeśli zmian
    `cash_deposit_terms`, `app_settings`.
 5. **Schemat bazy zmienia tylko nowa migracja** `invapp/db/migrations/00NN_opis.sql`. Zastosowanej migracji nie wolno edytować
    (suma SHA-256); wyjątek: poprawka samych komentarzy wpisana do `COMMENT_ONLY_EDITS` w `db/migrate.py`.
+6. **Wersja ze źródeł nigdy nie działa na prawdziwych danych** (`%LOCALAPPDATA%\AplikacjaInwestycyjna`). Jej migracje wyprzedziłyby
+   zainstalowaną aplikację, a ta przestałaby się uruchamiać („Baza ma migracje nowsze niż ten program”) – tak stało się 2026-11-13 przez
+   konfigurację podglądu z `--data-dir` na prawdziwe dane. Próby: `uruchom.py` (dane `-dev`) albo kopia (`python -m invapp.tools.kopiuj_dane`).
+   Kod tego pilnuje (`db/engine.source_migration_blocked`, test i mutacja); konfiguracje podglądu (`.claude/launch.json`) wskazują tylko dane `-dev`.
 
 ## 3. Prywatność i bezpieczeństwo
 

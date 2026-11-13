@@ -17,6 +17,7 @@ Definicje (opisane tez w interfejsie):
 * Zmiennosc roczna     - odchylenie standardowe dziennych stop zwrotu (dni robocze) x pierwiastek z 252.
 * Zwrot / ryzyko       - roczny TWR / zmiennosc roczna (BEZ stopy wolnej od ryzyka, wiec to nie jest klasyczny wskaznik Sharpe'a).
 * Stopa dywidendy      - dywidendy netto z ostatnich 12 miesiecy / biezaca wartosc papierow (oraz do kosztu otwartych pozycji).
+* Mapa miesiecznych zwrotow (monthly) - TWR kazdego miesiaca kalendarzowego (lancuch dziennych stop dni tego miesiaca); iloczyn miesiecy = TWR roku.
 * Wykres "Zwrot %" (return_series): TWR, TWR z dywidendami, zysk / wplaty netto, zysk / suma wplat, XIRR od poczatku do dnia, roczny TWR (CAGR).
   To tylko inne SPOSOBY pokazania tych samych liczb (wartosc, wplaty, dywidendy) - zadna kwota w aplikacji sie nie zmienia.
 """
@@ -205,6 +206,26 @@ def return_series(pts, income=None, step=7):
     return out
 
 
+def monthly_returns(returns, first, last):
+    """Mapa miesiecznych stop zwrotu: dla kazdego roku 12 miesiecy (TWR z dziennych stop dni danego miesiaca; None = miesiac poza historia)
+    i wynik roku. Te same dzienne stopy co "Rok do roku", wiec iloczyn miesiecy roku = TWR roku (kontrola w testach)."""
+    acc = {}
+    for d, r in returns:
+        k = (d.year, d.month)
+        acc[k] = acc.get(k, 1.0) * (1.0 + r)
+    out = []
+    for y in range(first.year, last.year + 1):
+        months = []
+        for m in range(1, 13):
+            months.append((acc[(y, m)] - 1.0) if (y, m) in acc else None)
+        tot = 1.0
+        for v in months:
+            if v is not None:
+                tot *= 1.0 + v
+        out.append({"year": y, "months": months, "total": (tot - 1.0) if any(v is not None for v in months) else None})
+    return out
+
+
 def volatility(returns, min_obs=30):
     xs = [r for d, r in returns if d.weekday() < 5]
     if len(xs) < min_obs:
@@ -267,7 +288,7 @@ def compute(series, income=None, cost_left=None):
         "gain": gain, "gain_pct_on_purchases": (gain / gross_end) if gross_end > 1e-9 else None,
         "gain_pct_on_net": (gain / invested_net_end) if invested_net_end > 1e-9 else None,
         "twr_total": twr_total, "twr_annualized": ann_twr, "xirr": xirr_all, "xirr_with_income": xirr_inc,
-        "windows": windows, "years": years, "drawdown": max_drawdown(rets, first), "volatility": vol,
+        "windows": windows, "years": years, "monthly": monthly_returns(rets, first, last), "drawdown": max_drawdown(rets, first), "volatility": vol,
         "drawdown_episodes": drawdown_episodes(rets, dict(gains_list), first), "profit_drawdown": profit_drawdown(gains_list),
         "return_to_risk": (ann_twr / vol) if (ann_twr is not None and vol) else None,
         "income_12m": inc12, "dividend_yield": (inc12 / v_end) if v_end > 1e-9 else None,

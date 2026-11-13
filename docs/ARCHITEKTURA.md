@@ -24,11 +24,13 @@ invapp/
     xtb/                    parser .xlsx, silnik importu, konta z pliku, specyfikacja OMI, reguły walut (.PL), pytania o splity
     trade_republic/         parser .csv, silnik importu, FIFO, ISIN → symbol dostawcy ze sprawdzeniem ceny, pytanie o lokatę
   pricing/                  dostawcy (Yahoo, NBP), notowania na żywo (service), historia (history), wskaźniki i miary zwrotu (metrics),
+                            tabela pozycji: Dziś, średni koszt, zamknięte, dochody 12 mies., wykres pozycji (positions),
                             indeksy porównawcze (benchmarks), profile/sektory (profiles), kontrola liczb (audit) + przyczyny i rozwiązania (diagnose)
   web/
     app.py                  FastAPI: strona, API importu, cen, historii, wskaźników, kontroli, pytań, aktualizacji, zamykania
     importing.py            import z interfejsu (wybór brokera po pliku, po kolei) i zadanie cen w tle
-    dashboard.py            dane strony; zakładki = lista brokerów + WSZYSTKIE; widoki Portfel / Ekspozycja / Gotówka / Symulacje
+    dashboard.py            dane strony; wybór portfela = lista brokerów + WSZYSTKIE; zakładki Portfel / Analiza / Dochody / Ekspozycja /
+                            Gotówka / Symulacje / Dane
     export_xlsx.py          eksport do Excela
     templates/, static/     strona (HTML) + wygląd i wykresy (CSS/JS bez zewnętrznych bibliotek, działa offline)
   tools/                    linia poleceń: nowy_broker (szkielet brokera), kopiuj_dane (dane do wersji testowej), potwierdzenie splitu
@@ -99,6 +101,26 @@ CLAUDE.md                   skrót zasad i poleceń dla pracy z kodem (także z 
 * **Split „Zdecyduj za mnie”** (`brokers/xtb/broker._auto_split`): dzień podziału z historii splitów Yahoo, jeśli współczynnik się zgadza
   i dzień leży między ostatnim zakupem a pierwszą sprzedażą po podziale; inaczej granica z transakcji. Zawsze oznaczony jako niesprawdzony
   w źródle oficjalnym (`official_source_status = NOT_VERIFIED`).
+
+## Wersja 0.4.0: układ zakładek, pozycje, analiza
+
+* **Zakładki**: Portfel (kafelki, wykres, lokaty, pozycje) · Analiza (wskaźniki, mapa miesięcznych zwrotów, obsunięcia, rok do roku, ryzyko) ·
+  Dochody · Ekspozycja (z alokacją wg kont i brokera) · Gotówka (konta bankowe i wolne środki – **bez lokat**) · Symulacje · Dane (kontrola
+  liczb, konta, korekty, instrumenty, raport importu, „Jak liczone”). Portfel (WSZYSTKIE / broker) wybierany z listy w nagłówku.
+* **Lokaty** to osobna część portfela (karta na stronie Portfel, wiersz w tabeli pozycji, alokacja „Lokaty”); nie są gotówką.
+* **Kafelki**: Wartość (+ zmiana dzienna), Zysk (całkowity, z rozbiciem: zmiana wartości otwartych pozycji, zrealizowany, dywidendy, odsetki,
+  nagrody, opłaty), Dochody 12 mies. (dywidendy netto + odsetki netto + nagrody z dni (dziś − 365, dziś]).
+* **Pozycje** (`pricing/positions.py`): **Dziś** = obecna ilość × (cena teraz − cena wczoraj), obie w PLN; cena wczoraj = ta sama, którą wykres
+  portfela przyjmuje dla wczorajszego dnia (zamknięcie ≤ wczoraj, nie starsze niż 7 dni, × kurs dzienny) – test porównuje z `build_series`;
+  tylko dla wyceny ceną rynkową. **Śr. koszt** = koszt / ilość. **Wykres pozycji**: zamknięcia dzienne Yahoo + znaczniki kupna/sprzedaży z księgi.
+  **Zamknięte**: zamknięcia partii pogrupowane po instrumencie; suma = zysk zrealizowany (kontrola liczb w `audit.py`).
+* **Mapa miesięcznych zwrotów** (`metrics.monthly_returns`): TWR każdego miesiąca z tych samych dziennych stóp; iloczyn miesięcy = TWR roku (test).
+* **Pod wykresem „Zwrot %”**: ile byłyby warte te same wpłaty w zaznaczonym indeksie (ta sama symulacja co w zakładce Symulacje).
+* **PDF**: Portfel + Analiza + Dochody na jednym wydruku.
+* **Waluta prezentacji** (`pricing/currency.py`, ustawienie `display_currency`, `docs/WALUTA.md`): PLN (domyślnie, bez zmian) albo USD/EUR/GBP/CHF
+  liczone w pełni w tej walucie – koszt po kursie z dnia zakupu, przychód po kursie z dnia sprzedaży, dochody po kursie z dnia wypłaty, wartość
+  po kursie teraz, wykres i TWR/XIRR z serii w walucie. Kursy dzienne Yahoo (YAHOO_1D) pobierane w tle dla wybranej waluty. Kontrola liczb
+  (`audit._currency_checks`) liczy to niezależnie w SQL. Eksport do Excela zostaje w PLN.
 
 ## Wydajność
 

@@ -36,6 +36,21 @@ class TestModes(unittest.TestCase):
             del os.environ[config.DATA_DIR_ENV]
         self.assertFalse(config.is_installed())                    # w repozytorium nie ma _build.py (tworzy go tylko budowanie instalatora)
 
+    def test_source_run_never_migrates_real_data(self):
+        """Wersja ze zrodel z --data-dir na prawdziwe dane nie migruje istniejacej bazy (zainstalowana wersja przestalaby sie uruchamiac)."""
+        from invapp.db import engine
+        real, todo = str(self.base / "AplikacjaInwestycyjna"), [("0099", "x", "h")]
+        with mock.patch.object(config, "is_installed", return_value=False):
+            with mock.patch.dict(os.environ, {config.DATA_DIR_ENV: real}):
+                self.assertTrue(engine.source_migration_blocked(todo, 20))
+                self.assertFalse(engine.source_migration_blocked([], 20))                      # nic do migracji
+                self.assertFalse(engine.source_migration_blocked(todo, 0))                     # nowa, pusta baza
+                with mock.patch.dict(os.environ, {engine.ALLOW_SOURCE_MIGRATION_ENV: "1"}):
+                    self.assertFalse(engine.source_migration_blocked(todo, 20))                # swiadomy wyjatek
+            self.assertFalse(engine.source_migration_blocked(todo, 20))                        # dane testowe (-dev)
+        with mock.patch.object(config, "is_installed", return_value=True):
+            self.assertFalse(engine.source_migration_blocked(todo, 20))                        # zainstalowana aplikacja migruje swoje dane
+
     def test_copy_real_data_to_dev_replaces_dev_and_keeps_source(self):
         src, dst = self.base / "AplikacjaInwestycyjna", self.base / "AplikacjaInwestycyjna-dev"
         (src / "baza").mkdir(parents=True); (src / "baza" / "PG_VERSION").write_text("16"); (src / "baza" / "postmaster.pid").write_text("x")
