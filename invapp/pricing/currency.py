@@ -166,7 +166,7 @@ def convert_live(cur, live, ccy, accounts, today=None):
         positions.append(p)
     deps = [dict(d, value=now(d.get("value")), unbooked_interest_net=now(d.get("unbooked_interest_net"))) for d in live.get("deposits", [])]
     if s is not None:
-        for f in ("securities_value", "deposits_value", "assets_value", "total_value", "cash_value", "xtb_free_value", "deposit_interest_unbooked"):
+        for f in ("securities_value", "deposits_value", "assets_value", "total_value", "cash_value", "xtb_free_value", "ppk_value", "deposit_interest_unbooked"):
             if s.get(f) is not None:
                 s[f] = now(s[f])
         miss = any(lo["missing"] for lo in lots.values())
@@ -183,12 +183,22 @@ def convert_live(cur, live, ccy, accounts, today=None):
         s["interest_net"] = inc["interest"] + inc["interest_tax"]
         s["additional_income"] = s["dividends_net"] + s["interest_net"] + inc["rewards"] + inc["fees"]
         s["total_result"] = s["total_result_live"] = (s["investment_gain"] + s["additional_income"]) if s["investment_gain"] is not None else None
+        ppk_miss = False
+        if s.get("ppk_gain") is not None:               # PPK w portfelu: wplaty (odtworzone dni, core/ppk.model) po kursie z dnia wplaty, wartosc po kursie teraz
+            from invapp.core import ppk
+            paid = _sum([rates.conv(f, d) for d, f in ppk.model(cur, today)["flows"]])
+            s["ppk_paid"] = paid
+            s["ppk_gain"] = (D(s["ppk_modeled_value"]) / k - paid) if paid is not None else None
+            s["ppk_modeled_value"] = now(s["ppk_modeled_value"])
+            ppk_miss = paid is None
+            if s["total_result"] is not None:
+                s["total_result"] = s["total_result_live"] = (s["total_result"] + s["ppk_gain"]) if s["ppk_gain"] is not None else None
         s["total_purchases"] = _sum([lo["purchases"] for lo in lots.values()])
         s["total_sales"] = _sum([lo["sales"] for lo in lots.values()])
         i12 = income_in(cur, accounts, rates, since=today - timedelta(days=365), until=today)
         dv, it = i12["dividends_gross"] + i12["withholding_tax"], i12["interest"] + i12["interest_tax"]
         s["income_12m"] = dict(s.get("income_12m") or {}, dividends=dv, interest=it, rewards=i12["rewards"], total=dv + it + i12["rewards"])
-        out["brak_kursu"] = miss or inc["missing"] or bool(rates.missing)
+        out["brak_kursu"] = miss or inc["missing"] or ppk_miss or bool(rates.missing)
     out["brakujace_dni_kursu"] = sorted(d.isoformat() for d in rates.missing)[:20]
     return dict(live, scope=s, positions=positions, deposits=deps, **out)
 
@@ -210,5 +220,8 @@ def convert_series(series, rates):
         val = D(p["value"]) / k
         q = dict(p, value=val, securities=D(p["securities"]) / k, deposits=D(p["deposits"]) / k, invested_gross=gross, sold=sold,
                  invested_net=gross - sold, gain=val - (gross - sold), fx=k)
+        for key in p:                                       # skladniki wartosci (brokerzy, PPK) - jak wartosc: / kurs(d)
+            if key.startswith("c_") or key == "ppk":
+                q[key] = D(p[key]) / k
         out.append(q)
     return {"series": out, "estimated_fx_days": est}

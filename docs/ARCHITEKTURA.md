@@ -122,6 +122,27 @@ CLAUDE.md                   skrót zasad i poleceń dla pracy z kodem (także z 
   po kursie teraz, wykres i TWR/XIRR z serii w walucie. Kursy dzienne Yahoo (YAHOO_1D) pobierane w tle dla wybranej waluty. Kontrola liczb
   (`audit._currency_checks`) liczy to niezależnie w SQL. Eksport do Excela zostaje w PLN.
 
+## Wersja 0.5.0: PPK
+
+* **Zakładka PPK** (`core/ppk.py`, `docs/PPK.md`): rachunek (nazwa, instytucja, fundusz, data przystąpienia) i **stany** przepisane ze strony
+  instytucji: data wyceny, wartość całkowita, dla każdej składki wpłaty narastająco i wartość. Stan = niezmienna migawka (`fn_ppk_commit_snapshot`):
+  te same liczby → nic się nie zmienia, ten sam dzień z innymi liczbami → poprawka (poprzednia wersja zostaje). Puste pole = brak danych, nie zero.
+  Wklejony tekst tylko wypełnia formularz (`ppk.parse_text`, nic nie zapisuje).
+* **Liczby**: łączne wpłaty = suma wpłat składek (gdy wszystkie znane); zmiana = wartość − łączne wpłaty (**orientacyjna** – bez dat wpłat nie ma
+  stopy zwrotu); „ponad Twoje wpłaty” = wartość − wpłaty pracownika. Kwoty zawsze w PLN.
+* **PPK w portfelu**: rachunek PPK jest w zakresach `PPK` i `NET_WORTH`, **nie** w `INVESTMENT_ALL` – domyślnie żadna liczba portfela się nie zmienia.
+  Ustawienie `include_ppk` (domyślnie wyłączone) włącza PPK do portfela WSZYSTKIE: `dashboard.add_cash` (wartość i aktywa + PPK, zysk + linia „PPK”
+  = wartość − łączne wpłaty), `dashboard._merge_ppk` (seria dzienna: wartość z modelu, wpłaty PPK jako wpłaty brutto – z niej wykres i wskaźniki),
+  `currency.convert_live` (wpłaty PPK po kursie ze swojego dnia). Model w czasie (`ppk.model`): składki 15. dnia miesiąca, powitalna po 3 pełnych
+  miesiącach i kwartale, dopłata roczna 15 kwietnia; wartość między stanami – stała stopa dopasowana do stanów (opis w `docs/PPK.md`).
+* **Wykres „Portfel w czasie” (WSZYSTKIE, tryb Wartość)**: zawsze wartość całego portfela + składniki do włączania/wyłączania w legendzie –
+  każdy broker (seria jego zakresu, `dashboard._add_parts`, pola `c_<kod>`) i PPK (gdy wliczane); suma składników = wartość dnia (różnice
+  zaokrągleń do 1 gr przy ułamkowych akcjach). Ostatni punkt = wycena na żywo (pozycje i lokaty brokera, wartość PPK).
+* **Kontrola liczb** (`audit._ppk_checks`, zakres WSZYSTKIE): suma wartości składek = wartość wg instytucji (tolerancja 1 gr na wiersz, jak w bazie),
+  liczby zakładki = przeliczenie z tabel bazowych (bez widoków `v_ppk_*`), stan nie starszy niż 45 dni (ostrzeżenie), model trafia w każdy stan.
+* **Usuwanie**: „Usuń z listy” zamyka rachunek (status `CLOSED`); migawki zostają. „Usuń wszystko” (pliki brokerów) PPK nie dotyka.
+  Eksport do Excela: arkusz „PPK”.
+
 ## Wydajność
 
 Pomiar 2026-11-13 (prawdziwe dane, ~1200 operacji, 3 lata historii): strony i API 40–250 ms, eksport Excela 0,5 s, zadanie cen w tle ~5 s.

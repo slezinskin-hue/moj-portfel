@@ -472,6 +472,54 @@ async def api_cash_archive(aid: int, request: Request):
     return await owner_write(request, lambda cur, b: cash.archive(cur, aid))
 
 
+@app.get("/api/ppk")
+def api_ppk():
+    """Zakladka PPK: rachunki z biezacym stanem, kategoriami skladek, historia stanow i ostrzezeniami (core/ppk.py)."""
+    try:
+        return JSONResponse(_jsonable(preview.ppk_data()))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"blad": type(e).__name__}, status_code=503)
+
+
+@app.post("/api/ppk/konto")
+async def api_ppk_add(request: Request):
+    from invapp.core import ppk
+    return await owner_write(request, lambda cur, b: {"id": ppk.add_account(cur, b.get("nazwa"), b.get("instytucja"), b.get("fundusz"),
+                                                                            b.get("data_przystapienia"), b.get("rok_docelowy"))})
+
+
+@app.post("/api/ppk/konto/{aid}/stan")
+async def api_ppk_snapshot(aid: int, request: Request):
+    from invapp.core import ppk
+    return await owner_write(request, lambda cur, b: ppk.add_snapshot(cur, aid, b.get("data_wyceny"), b.get("wartosc"), b.get("linie"), b.get("zrodlo")))
+
+
+@app.post("/api/ppk/konto/{aid}/usun")
+async def api_ppk_archive(aid: int, request: Request):
+    from invapp.core import ppk
+    return await owner_write(request, lambda cur, b: ppk.archive(cur, aid))
+
+
+@app.post("/api/ppk/odczytaj")
+async def api_ppk_parse(request: Request):
+    """Wklejony tekst -> propozycja pol formularza. Nic nie zapisuje (polaczenie tylko do odczytu); tekst nie jest przechowywany."""
+    if not _same_origin(request):
+        return JSONResponse({"blad": "niedozwolone zadanie"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    text = body.get("tekst") if isinstance(body, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return JSONResponse({"blad": "Wklej tekst ze strony instytucji."}, status_code=422)
+    from invapp.core import ppk
+    conn = preview._connect(readonly=True)
+    try:
+        return JSONResponse(_jsonable(ppk.parse_text(conn.cursor(), text)))
+    finally:
+        conn.close()
+
+
 @app.post("/api/ustawienia")
 async def api_settings(request: Request):
     from invapp.core import cash

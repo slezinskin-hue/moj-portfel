@@ -9,7 +9,8 @@ Wczytujesz eksporty od brokera, a aplikacja liczy:
 * **wykresy** z przybliżaniem, alokację, dochody miesięczne; wykres „Zwrot %” z kilkoma miarami naraz (TWR, TWR z dywidendami, zysk od wpłat,
   XIRR, CAGR) i **porównaniem z indeksami** (Nasdaq-100, S&P 500, MSCI World, WIG20 – w PLN),
 * zakładki **Ekspozycja** (typ, sektor, rynek notowania, waluta, koncentracja), **Gotówka** (konta bankowe wpisywane ręcznie, wolne środki XTB –
-  do wliczenia w wartość portfela na życzenie) i **Symulacje** (projekcja z celem, „co gdybym inwestował w indeks”),
+  do wliczenia w wartość portfela na życzenie), **PPK** (stany rachunku przepisane ze strony instytucji: wartość, wpłaty Twoje / pracodawcy / państwa,
+  zmiana wartości i wykres) i **Symulacje** (projekcja z celem, „co gdybym inwestował w indeks”),
 * **eksport** do Excela i PDF, wybór **źródła cen** (Yahoo na żywo albo wartości z ostatniego eksportu XTB) i **kursów** (rynkowe albo NBP),
 * i **sprawdza poprawność liczb** (niezależne przeliczenie i tożsamości księgowe); przy każdej uwadze podaje prawdopodobną przyczynę i przycisk
   rozwiązania (np. „Zdecyduj za mnie” przy podziale akcji niewidocznym w eksporcie) – bez ręcznego dopisywania kwot.
@@ -28,7 +29,8 @@ Pobierz `MojPortfel-Setup-X.Y.Z.exe` z **Releases** tego repozytorium na GitHubi
   instrumentów (ceny, sektory i indeksy z Yahoo Finance), zapytania o kursy NBP, specyfikacja instrumentów XTB i pytanie o nową wersję aplikacji (GitHub).
   Aplikacja nie ma kont, logowania, telemetrii ani wysyłania raportów.
 * Z eksportów nie są zapisywane dane osobowe (IBAN, imiona i nazwiska z opisów przelewów) – tylko skrót i maska. Konta bankowe w zakładce
-  „Gotówka” mają tylko nazwę i saldo (bez numerów).
+  „Gotówka” mają tylko nazwę i saldo (bez numerów). PPK: zapisywane są tylko kwoty, daty, nazwa instytucji i funduszu – bez numeru rejestru
+  i nazwy pracodawcy; tekst wklejony ze strony instytucji służy tylko do uzupełnienia pól i nie jest zapisywany.
 * Aplikacja nasłuchuje wyłącznie na 127.0.0.1 i odrzuca żądania z obcymi nagłówkami Host/Origin (strona otwarta w przeglądarce nie odczyta
   danych portfela); strona nie ładuje niczego z internetu i nie może być osadzona w cudzej stronie. Wbudowana baza PostgreSQL ma losowe hasła
   i przyjmuje połączenia tylko z tego komputera.
@@ -55,7 +57,7 @@ python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing t
 
 Dokumentacja: [docs/ZASADY.md](docs/ZASADY.md) (reguły i listy kontrolne), [docs/ARCHITEKTURA.md](docs/ARCHITEKTURA.md),
 [docs/DODAWANIE_BROKERA.md](docs/DODAWANIE_BROKERA.md) (nowy broker w kilka minut: `python -m invapp.tools.nowy_broker`),
-[docs/DODAWANIE_MODULU.md](docs/DODAWANIE_MODULU.md) (nowa zakładka / rodzaj aktywów), [docs/PPK.md](docs/PPK.md) (plan modułu PPK),
+[docs/DODAWANIE_MODULU.md](docs/DODAWANIE_MODULU.md) (nowa zakładka / rodzaj aktywów), [docs/PPK.md](docs/PPK.md) (moduł PPK),
 [docs/INSTALATOR.md](docs/INSTALATOR.md) (instalator, wydania, aktualizacje), [docs/ROZWOJ.md](docs/ROZWOJ.md) (praca nad zmianami), [CLAUDE.md](CLAUDE.md) (skrót dla pracy z kodem).
 
 ## Zastrzeżenia

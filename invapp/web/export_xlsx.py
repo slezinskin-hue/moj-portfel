@@ -57,7 +57,7 @@ def build(scope_key="all"):
     ws.append([f"Stan na {datetime.now().strftime('%Y-%m-%d %H:%M')} · wersja {__version__} · kwoty w PLN"])
     ws.append([])
     rows = [("Wartość portfela", s.get("total_value", s.get("assets_value")), PLN), ("w tym papiery", s.get("securities_value"), PLN),
-            ("w tym lokaty", s.get("deposits_value"), PLN), ("w tym gotówka z banków (gdy włączona)", s.get("cash_value"), PLN),
+            ("w tym lokaty", s.get("deposits_value"), PLN), ("w tym gotówka z banków (gdy włączona)", s.get("cash_value"), PLN), ("w tym PPK (gdy włączone)", s.get("ppk_value"), PLN),
             ("w tym wolne środki XTB (gdy włączone)", s.get("xtb_free_value"), PLN), ("Zysk całkowity", s.get("total_result_live"), PLN),
             ("Zysk z inwestycji", s.get("investment_gain"), PLN), ("niezrealizowany", s.get("unrealized_gain"), PLN), ("zrealizowany", s.get("realized_gain"), PLN),
             ("Dywidendy, odsetki i inne (netto)", s.get("additional_income"), PLN), ("Koszt otwartych pozycji", s.get("securities_cost"), PLN)]
@@ -113,6 +113,20 @@ def build(scope_key="all"):
                [[a["nazwa"], "konto bankowe", a["waluta"], a["saldo"], a["na_dzien"], a["wartosc_pln"]] for a in c["konta"]]
                + [[w["konto"], "XTB – wolne środki", "PLN", w["saldo"], None, w["saldo"]] for w in c["wolne_xtb"]], {4: '#,##0.00', 6: PLN}, {1: 30})
     except Exception:  # noqa: BLE001 - baza bez tabel gotowki
+        pass
+
+    try:
+        rows = []
+        for a in dashboard.ppk_data()["rachunki"]:
+            st = a.get("stan")
+            if st:
+                rows += [[a["nazwa"], st["data_wyceny"], c["nazwa"], c["wplaty"], c["wartosc"], c["zmiana"]] for c in a["kategorie"]]
+            rows += [[a["nazwa"], h["data_wyceny"], "Stan całkowity" + (" (poprawka)" if h["poprawka"] else ""), h["wplaty"], h["wartosc"], h["zmiana"]]
+                     for h in a["historia"]]
+        if rows:
+            _sheet(wb, "PPK", ["Rachunek", "Data wyceny", "Rodzaj", "Wpłaty narastająco", "Wartość", "Zmiana (orientacyjnie)"], rows,
+                   {2: "yyyy-mm-dd", 4: PLN, 5: PLN, 6: PLN}, {1: 24, 3: 34})
+    except Exception:  # noqa: BLE001 - baza bez tabel PPK
         pass
 
     buf = io.BytesIO()

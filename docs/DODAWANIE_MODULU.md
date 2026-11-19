@@ -2,7 +2,7 @@
 
 Moduł = funkcja aplikacji, która nie jest brokerem: dane wpisywane ręcznie albo z innego źródła niż eksport brokera.
 Wzorzec: **Gotówka** (wersja 0.3.0) – migracja `0017`, logika `invapp/core/cash.py`, API w `invapp/web/app.py`, zakładka w interfejsie.
-Kolejny planowany moduł: **PPK** (`docs/PPK.md`).
+Drugi przykład: **PPK** (wersja 0.5.0, `docs/PPK.md`) – moduł na schemacie z migracji 0001, bez nowej migracji.
 
 ## Miejsca do zmiany (w tej kolejności)
 

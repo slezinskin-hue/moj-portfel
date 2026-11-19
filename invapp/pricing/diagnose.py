@@ -166,6 +166,12 @@ def annotate(cur, audit, questions, scope_code):
         elif name.startswith("Lokata"):
             why = "W saldzie gotówki są operacje, których aplikacja nie rozpoznała jako wpłaty, wypłaty ani dochodu – mogą pochodzić z niepełnego pliku."
             acts = [_act(IMPORT, "Wczytaj aktualny eksport"), _act(REBUILD, "Przelicz wszystko od nowa")]
+        elif name.startswith("PPK") and "nie starszy" in name:
+            why = "Stan PPK wpisuje się ręcznie – instytucja nie udostępnia go aplikacji. Wartość może być już inna. Otwórz zakładkę „PPK” i wpisz aktualny stan ze strony instytucji (np. raz w miesiącu)."
+            acts = []
+        elif name.startswith("PPK") and "suma wartości" in name:
+            why = "Wpisane wartości składek nie sumują się do wartości całkowitej podanej przez instytucję – zwykle literówka albo pominięty wiersz. Otwórz zakładkę „PPK” i wpisz stan z tego dnia jeszcze raz z poprawionymi kwotami (zastąpi poprzedni; poprzedni zostaje w historii)."
+            acts = []
         elif name.startswith("Wartość każdej pozycji") or name.startswith("Wartość portfela"):
             why = "Ceny zmieniły się w trakcie sprawdzania albo przeliczenie jest nieaktualne."
             acts = [_act(REBUILD, "Przelicz wszystko od nowa"), _act(PRICES, "Pobierz ceny ponownie")]

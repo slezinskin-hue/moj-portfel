@@ -251,3 +251,19 @@ table.heat td.e { color: var(--line2); }
 table.heat tbody tr:hover { background: none; }
 .radios { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .check.inline { margin: 2px 0; }
+
+/* PPK */
+.ppk-acc { padding: 6px 0 14px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.ppk-acc:last-child { border-bottom: 0; margin-bottom: 0; }
+.ppk-acc h3 { margin: 0; font-size: 1.05rem; }
+.ppk-acc .table-wrap { margin-top: 12px; }
+.ppk-chart { min-height: 220px; }
+.ppk-hist { margin-top: 10px; }
+.ppk-hist summary, details.paste summary { cursor: pointer; font-weight: 600; color: var(--ink2); }
+details.paste { margin-bottom: 12px; }
+details.paste textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line2); background: var(--card2); color: var(--ink); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: .85rem; margin-top: 8px; }
+ul.notes { margin: 8px 0 0; padding-left: 18px; font-size: .85rem; }
+#ppk-snap-lines input { width: 9em; text-align: right; }
+.ppk-acc .acts, #ppk-snap .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.ppk-cat tfoot th, #ppk-snap-lines tfoot th { text-transform: none; letter-spacing: 0; color: var(--ink); font-size: .86rem; position: static; }
+.legend button.fixed { cursor: default; font-weight: 600; }

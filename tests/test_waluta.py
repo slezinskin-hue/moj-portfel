@@ -78,12 +78,13 @@ class TestLiveAndSeries(CurBase):
         self.store_fx("USD", span(D0, 10, lambda i: D("4.00") + D("0.10") * i))
         self.live_fx(D("3.80"))
         live = {"scope": {"securities_value": D(700), "deposits_value": D(0), "assets_value": D(700), "total_value": D(700), "cash_value": 0,
-                          "xtb_free_value": 0, "deposit_interest_unbooked": 0, "income_12m": {}},
+                          "xtb_free_value": 0, "ppk_value": D(380), "deposit_interest_unbooked": 0, "income_12m": {}},
                 "positions": [{"listing_id": self.l, "qty": D(5), "value": D(700), "price_pln": D(140), "cost_left": D(500), "accounts": [],
                                "prev_price_pln": None}], "deposits": []}
         w = currency.convert_live(self.cur, live, "USD", [self.acct], today=D0 + timedelta(days=9))
         s = w["scope"]
         self.assertEqual(s["securities_value"], D(700) / D("3.80"))
+        self.assertEqual(s["ppk_value"], D(100))                                        # PPK doliczone do wartosci (ustawienie) - po kursie teraz
         self.assertEqual(s["securities_cost"], D(500) / D("4.00"))
         self.assertEqual(s["realized_gain"], D(600) / D("4.50") - D(500) / D("4.00"))
         self.assertEqual(s["dividends_gross"], D(40) / D("4.60"))

@@ -52,9 +52,9 @@
     const s = S.live && S.live.scope; if (!s) return;
     const assets = s.assets_value, total = s.total_result_live, base = assets - total;      // procent zysku: od kwot zainwestowanych (bez gotówki)
     const m = S.met && S.met.available ? S.met : null;
-    const cash = +s.cash_value || 0, free = +s.xtb_free_value || 0;
+    const cash = +s.cash_value || 0, free = +s.xtb_free_value || 0, ppkv = +s.ppk_value || 0;
     $('#k-value').textContent = zl(s.total_value !== undefined ? s.total_value : assets);
-    const parts = [['papiery', s.securities_value]].concat(+s.deposits_value ? [['lokaty', s.deposits_value]] : [], cash ? [['gotówka', cash]] : [], free ? [['wolne środki XTB', free]] : []);
+    const parts = [['papiery', s.securities_value]].concat(+s.deposits_value ? [['lokaty', s.deposits_value]] : [], cash ? [['gotówka', cash]] : [], free ? [['wolne środki XTB', free]] : [], ppkv ? [['PPK', ppkv]] : []);
     $('#k-value-l').textContent = 'Wartość portfela' + (parts.length > 1 ? ' (' + parts.map(p => p[0]).join(' + ') + ')' : '');
     $('#k-value-s').innerHTML = parts.length > 1 ? parts.map(p => p[0] + ' ' + zl(p[1])).join(' · ') : 'ilość × aktualna cena z Yahoo × kurs';
     $('#k-day').innerHTML = m && m.day_change !== null ? `<span class="chip">${zlS(m.day_change)} (${pct(m.day_change_pct)}) od ${m.day_change_from.slice(8, 10)}.${m.day_change_from.slice(5, 7)}</span>` : '';
@@ -63,7 +63,8 @@
     // rozbicie zysku (te same skladniki co w podsumowaniu zakresu; suma = zysk calkowity - kontrola liczb)
     const row = (l, v, c) => `<div class="r ${c || ''}"><span>${l}</span><b class="${cls(v)}">${zlS(v)}</b></div>`;
     $('#k-gain-break').innerHTML = row('Zysk z inwestycji', s.investment_gain) + row('zmiana wartości otwartych pozycji', s.unrealized_gain, 'sub') + row('zrealizowany ze sprzedaży', s.realized_gain, 'sub') +
-      row('Dywidendy netto', s.dividends_net) + row('Odsetki netto', s.interest_net) + (+s.rewards ? row('Nagrody', s.rewards) : '') + (+s.fees ? row('Opłaty', s.fees) : '') + row('Zysk całkowity', total, 't');
+      row('Dywidendy netto', s.dividends_net) + row('Odsetki netto', s.interest_net) + (+s.rewards ? row('Nagrody', s.rewards) : '') + (+s.fees ? row('Opłaty', s.fees) : '') +
+      (s.ppk_gain !== undefined && s.ppk_gain !== null ? row('PPK (wartość − łączne wpłaty)', s.ppk_gain) : '') + row('Zysk całkowity', total, 't');
     const i12 = s.income_12m;
     if (i12) {
       $('#k-inc').innerHTML = `<span class="${cls(i12.total)}">${zlS(i12.total)}</span>`;
@@ -196,6 +197,7 @@
       deps.forEach(d => add(kind === 'acct' ? 'Lokaty' : (d.broker === 'TR' ? 'Trade Republic' : d.broker), d.value));
       if (+sc.cash_value) add(kind === 'acct' ? 'Gotówka (banki)' : 'Banki', +sc.cash_value);
       if (+sc.xtb_free_value) add(kind === 'acct' ? 'Wolne środki XTB' : 'XTB', +sc.xtb_free_value);
+      if (+sc.ppk_value) add('PPK', +sc.ppk_value);
       return Object.entries(g).map(([label, value]) => ({label, value})).sort((a, b) => b.value - a.value).map((it, i) => Object.assign(it, {color: PAL[i % PAL.length]}));
     };
     Charts.donut($('#alloc-acct'), build('acct'), {fmt: zl, centerLabel: 'Wartość', size: 190});
@@ -229,10 +231,22 @@
   S.pct = stored('invapp-pct', ['twr']); S.bench = stored('invapp-bench', []);
   const benchList = () => (S.hist && S.hist.porownanie && S.hist.porownanie.indeksy) || [];
   const benchHasData = b => { const lv = S.hist.porownanie.poziomy[b.key] || []; return lv.some(v => v !== null); };
+  const PARTCOL = ['var(--c4)', 'var(--c3)', 'var(--c5)', 'var(--c6)', 'var(--c7)', 'var(--c8)'];
+  const parts = () => (S.hist && S.hist.skladniki) || [];
+  // wartosc skladnika teraz (ostatni punkt wykresu = wycena na zywo): broker = jego pozycje + lokaty, PPK = wartosc PPK w portfelu
+  function livePart(key) {
+    const L = S.live; if (!L || !L.scope) return null;
+    if (key === 'c_PPK') return +(L.scope.ppk_modeled_value || 0);
+    const code = key.slice(2); let v = 0;
+    (L.positions || []).forEach(r => (r.accounts || []).forEach(a => { if (a.broker === code) v += +a.value || 0; }));
+    (L.deposits || []).forEach(d => { if (d.broker === code) v += +d.value || 0; });
+    return v;
+  }
   const MODES = {
-    value: {series: () => [{key: 'value', label: 'Wartość portfela', color: 'var(--c1)', area: true}, {key: 'invested_net', label: 'Wpłaty netto', color: 'var(--c2)', width: 2}]
-      .concat(S.hist && S.hist.series.some(p => Number(p.deposits)) ? [{key: 'securities', label: 'w tym papiery', color: 'var(--c4)', width: 1.5},
-                                                                       {key: 'deposits', label: 'w tym lokaty (gotówka)', color: 'var(--c3)', width: 1.5}] : []), fmt: zl0},
+    value: {series: () => [{key: 'value', label: 'Wartość całego portfela', color: 'var(--c1)', area: true, fixed: true}, {key: 'invested_net', label: 'Wpłaty netto', color: 'var(--c2)', width: 2}]
+      .concat(parts().length ? parts().map((c, i) => ({key: c.key, label: c.label, color: PARTCOL[i % PARTCOL.length], width: 1.6}))      // WSZYSTKIE: skladniki do wlaczania
+        : S.hist && S.hist.series.some(p => Number(p.deposits)) ? [{key: 'securities', label: 'w tym papiery', color: 'var(--c4)', width: 1.5},
+                                                                   {key: 'deposits', label: 'w tym lokaty (gotówka)', color: 'var(--c3)', width: 1.5}] : []), fmt: zl0},
     gain: {series: () => [{key: 'gain', label: 'Zysk (wartość − wpłaty netto)', color: 'var(--c4)', signed: true}], fmt: zl0},
     twr: {series: () => {
       const sel = PCT.filter(m => S.pct.includes(m.k)), bs = benchList().filter(b => S.bench.includes(b.key) && benchHasData(b));
@@ -248,13 +262,17 @@
       const k = ri[p.date], o = {t: new Date(p.date + 'T00:00:00').getTime(), date: p.date, value: +p.value, invested_net: +p.invested_net, deposits: +p.deposits, securities: +p.securities,
         gain: +p.gain, invested_gross: +p.invested_gross, sold: +p.sold, positions: p.positions, est: p.estimated_positions,
         twr_lvl: k !== undefined ? is[k][1] : null};
+      parts().forEach(c => { o[c.key] = p[c.key] === undefined ? null : +p[c.key]; });
       o.twr = o.twr_lvl === null ? null : o.twr_lvl - 1;
       if (rs && k !== undefined) PCT.slice(1).forEach(m => o[m.key] = rs[m.key] ? rs[m.key][k] : null);
       if (bz) bz.indeksy.forEach(b => o['b_' + b.key] = (bz.poziomy[b.key] || [])[j]);
       return o;
     });
     const s = S.live && S.live.scope;
-    if (s && pts.length) { const last = pts[pts.length - 1]; last.value = +s.assets_value; last.gain = last.value - last.invested_net; last.securities = +s.securities_value; last.deposits = +s.deposits_value; }
+    if (s && pts.length) {
+      const last = pts[pts.length - 1]; last.value = +s.assets_value; last.gain = last.value - last.invested_net; last.securities = +s.securities_value; last.deposits = +s.deposits_value;
+      parts().forEach(c => { const v = livePart(c.key); if (v !== null) last[c.key] = v; });
+    }
     return pts;
   }
   function tipMain(p, series, chart) {
@@ -265,7 +283,9 @@
       if (series.some(s => s.rebase)) h += `<div class="r muted"><span>TWR i indeksy od</span><span>${Charts.fmtDate(chart.baseT)}</span></div>`;
       return h;
     }
-    if (S.mode === 'value') h += r('var(--c1)', 'Wartość', zl(p.value)) + (p.deposits ? r('var(--c4)', '· papiery', zl(p.securities)) + r('var(--c3)', '· lokaty', zl(p.deposits)) : '') + r('var(--c2)', 'Wpłaty netto', zl(p.invested_net));
+    if (S.mode === 'value') h += r('var(--c1)', 'Wartość', zl(p.value)) +
+      (parts().length ? parts().map((c, i) => r(PARTCOL[i % PARTCOL.length], '· ' + esc(c.label), zl(p[c.key]))).join('')
+        : p.deposits ? r('var(--c4)', '· papiery', zl(p.securities)) + r('var(--c3)', '· lokaty', zl(p.deposits)) : '') + r('var(--c2)', 'Wpłaty netto', zl(p.invested_net));
     h += r(p.gain >= 0 ? 'var(--pos)' : 'var(--neg)', 'Zysk', zlS(p.gain));
     if (p.twr !== null) h += r('var(--c3)', 'Zwrot TWR', pct(p.twr));
     h += `<div class="r muted"><span>pozycji</span><span>${p.positions}${p.est ? ' (oszac. ' + p.est + ')' : ''}</span></div>`;
@@ -283,6 +303,7 @@
     const h = S.hist, last = pts[pts.length - 1];
     $('#chart-note').innerHTML = !pts.length ? 'Brak danych do wykresu.' : `Od ${esc(h.series[0].date)}: wartość ${zl(last.value)}, wpłaty netto ${zl(last.invested_net)}, zysk <span class="${cls(last.gain)}">${zlS(last.gain)}</span>.` +
       (h.estimated_days ? ` <span class="warn">${h.estimated_days} z ${h.series.length} dni ma oszacowane ceny części pozycji (brak historii instrumentu).</span>` : '') +
+      (h.ppk ? ` <span class="muted">Zawiera PPK od ${esc(h.ppk.od)}: dni wpłat odtworzone z reguł PPK, wartość między wpisanymi stanami szacowana (stała stopa dopasowana do stanów).</span>` : '') +
       (S.mode === 'twr' ? '<br>TWR i indeksy pokazują zwrot <b>od pierwszego dnia widocznego okresu</b> (przybliż lub wybierz 1R, YTD…, aby porównać inny okres); pozostałe miary liczone są od początku. ' +
         'Indeksy w ' + CUR + ' (kurs dnia z Yahoo), cenowe – bez dywidend, jak TWR; WIG20 to ETF Beta WIG20TR (z dywidendami), bo Yahoo nie podaje historii samego indeksu.' +
         (!main.o.series.length ? ' <span class="warn">Zaznacz co najmniej jedną miarę lub indeks.</span>' : '') : '');
@@ -309,8 +330,8 @@
     $$('#pct-bench button').forEach(b => b.onclick = () => { const k = b.dataset.k; S.bench = S.bench.includes(k) ? S.bench.filter(x => x !== k) : S.bench.concat(k); store('invapp-bench', S.bench); buildMain(); });
   }
   function renderLegend() {
-    $('#legend').innerHTML = MODES[S.mode].series().map(s => `<button data-k="${s.key}" class="${main.hidden.has(s.key) ? 'off' : ''}"><span class="sw" style="background:${s.signed ? 'linear-gradient(90deg,var(--pos),var(--neg))' : s.color}"></span>${s.label}</button>`).join('');
-    $$('#legend button').forEach(b => b.onclick = () => { main.toggle(b.dataset.k); renderLegend(); });
+    $('#legend').innerHTML = MODES[S.mode].series().map(s => `<button data-k="${s.key}" class="${main.hidden.has(s.key) ? 'off' : ''}${s.fixed ? ' fixed' : ''}"${s.fixed ? ' title="Zawsze widoczna"' : ' title="Kliknij, aby pokazać / ukryć"'}><span class="sw" style="background:${s.signed ? 'linear-gradient(90deg,var(--pos),var(--neg))' : s.color}"></span>${esc(s.label)}</button>`).join('');
+    $$('#legend button:not(.fixed)').forEach(b => b.onclick = () => { main.toggle(b.dataset.k); renderLegend(); });
   }
   function applyRange(k, silent) {
     S.range = k; if (!main || !main.data.length) return;
@@ -473,13 +494,14 @@
   }
 
   // ---------------------------------------------------------------- zakladki widokow (Portfel / Analiza / Dochody / Ekspozycja / Gotowka / Symulacje / Dane)
-  const VIEWS = ['portfel', 'analiza', 'dochody', 'ekspozycja', 'gotowka', 'symulacje', 'dane'];
+  const VIEWS = ['portfel', 'analiza', 'dochody', 'ekspozycja', 'gotowka', 'ppk', 'symulacje', 'dane'];
   const viewOf = () => { const m = location.hash.match(/^#\/(\w+)/); return m && VIEWS.includes(m[1]) ? m[1] : 'portfel'; };
   function showView() {
     const v = viewOf();
     $$('.view').forEach(x => x.hidden = x.dataset.view !== v);
     $$('.vtab').forEach(a => a.classList.toggle('on', a.dataset.v === v));
     if (v === 'gotowka') loadCash();
+    if (v === 'ppk') loadPpk();
     if (v === 'ekspozycja') { if (window.renderExposure) window.renderExposure(); renderAlloc(); }
     if (v === 'symulacje' && window.renderSim) window.renderSim();
     if (v === 'analiza' && under) under.render();
@@ -684,11 +706,12 @@
   }
   async function saveSetting(key, value) {
     const d = await post('/api/ustawienia', {klucz: key, wartosc: value}); syncSettings(d.ustawienia);
-    await loadLive({fast: true}); loadAudit(); if (key === 'price_source' || key === 'fx_source') loadHistory();
+    await loadLive({fast: true}); loadAudit(); if (key === 'price_source' || key === 'fx_source' || key === 'include_ppk') loadHistory();
     if (viewOf() === 'gotowka') loadCash();
+    if (viewOf() === 'ppk') loadPpk();
   }
   $$('input[data-set]').forEach(i => i.onchange = async () => {
-    try { await saveSetting(i.dataset.set, i.checked); toast(i.checked ? 'Włączono – wartość portfela obejmuje teraz tę gotówkę.' : 'Wyłączono.'); }
+    try { await saveSetting(i.dataset.set, i.checked); toast(i.checked ? (i.dataset.set === 'include_ppk' ? 'Włączono – portfel WSZYSTKIE obejmuje teraz PPK (wartość, wpłaty, zysk, wykres).' : 'Włączono – wartość portfela obejmuje teraz tę gotówkę.') : 'Wyłączono.'); }
     catch (e) { i.checked = !i.checked; toast(e.message); }
   });
   $$('#set-modal input[type=radio]').forEach(i => i.onchange = async () => {
@@ -707,6 +730,133 @@
     e.preventDefault(); const f = e.target, b = f.querySelector('button'); b.disabled = true;
     try { await post('/api/gotowka/konto', Object.fromEntries(new FormData(f))); f.reset(); toast('Dodano konto.'); loadCash(); loadLive({fast: true}); }
     catch (err) { toast(err.message); } finally { b.disabled = false; }
+  };
+
+  // ---------------------------------------------------------------- PPK (core/ppk.py): stany wpisywane recznie, wynik orientacyjny
+  const PAYER = {EMPLOYEE: 'Ty (pracownik)', EMPLOYER: 'pracodawca', STATE: 'państwo'};
+  const pz = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf2.format(v) + ' zł';          // PPK zawsze w PLN
+  const pzS = v => (v === null || v === undefined) ? '—' : sgn(v) + pz(v);
+  const dpl = s => s ? `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}` : '—';
+  const amt = s => { s = String(s || '').replace(/[\s  ]|zł|PLN/gi, '').replace(',', '.'); return s === '' || isNaN(s) ? null : Number(s); };
+  async function loadPpk() {
+    try { S.ppk = await getJSON('/api/ppk'); renderPpk(); } catch (e) { $('#ppk-accounts').innerHTML = '<p class="warn">Nie udało się wczytać PPK (' + esc(e.message) + ').</p>'; }
+  }
+  function ppkAccHtml(a) {
+    const st = a.stan, t = (l, v, s) => `<div class="m"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || ''}</div></div>`;
+    let h = `<div class="ppk-acc" data-id="${a.id}"><div class="card-h"><h3>${esc(a.nazwa)}</h3><span class="hint">${esc(a.fundusz)} · ${esc(a.instytucja)} · przystąpienie ${dpl(a.data_przystapienia)}</span></div>`;
+    if (!st) return h + '<p class="muted">Brak stanu. Wpisz wartość i składki ze strony instytucji.</p><div class="acts"><button class="btn primary" data-a="snap">Wpisz stan</button> <button class="btn ghost" data-a="del">Usuń rachunek z listy</button></div></div>';
+    const payers = [['Ty', st.wplaty_pracownik], ['pracodawca', st.wplaty_pracodawca], ['państwo', st.wplaty_panstwo]].filter(x => x[1] !== null).map(x => x[0] + ' ' + pz(x[1])).join(' · ');
+    h += '<div class="mgrid">' +
+      t('Wartość', pz(st.wartosc), 'wycena ' + dpl(st.data_wyceny) + (st.nieaktualna ? ` · <span class="warn">${st.dni_od_wyceny} dni temu – wpisz aktualny stan</span>` : ` · ${st.dni_od_wyceny} dni temu`)) +
+      t('Łączne wpłaty', pz(st.wplaty), payers || 'brak danych o wpłatach') +
+      t('Zmiana wartości', `<span class="${cls(st.zmiana)}">${pzS(st.zmiana)}</span>`, st.zmiana_pct === null ? 'brak danych' : `<span class="chip ${cls(st.zmiana)}">${pct(st.zmiana_pct)}</span> od łącznych wpłat (orientacyjnie)`) +
+      t('Ponad Twoje wpłaty', `<span class="${cls(st.ponad_wlasne)}">${pzS(st.ponad_wlasne)}</span>`, st.ponad_wlasne_pct === null ? 'brak danych o wpłatach pracownika' : `<span class="chip ${cls(st.ponad_wlasne)}">${pct(st.ponad_wlasne_pct)}</span> od Twoich wpłat ${pz(st.wplaty_wlasne)}`) +
+      '</div>';
+    const rows = a.kategorie.map(c => `<tr><td>${esc(c.nazwa)}</td><td>${PAYER[c.platnik] || ''}</td><td class="n">${pz(c.wplaty)}</td><td class="n">${pz(c.wartosc)}</td>
+      <td class="n ${cls(c.zmiana)}">${pzS(c.zmiana)}</td><td class="n ${cls(c.zmiana_pct)}">${pct(c.zmiana_pct)}</td></tr>`).join('');
+    const sumV = a.kategorie.reduce((s, c) => s + (+c.wartosc || 0), 0);
+    h += `<div class="table-wrap"><table class="ppk-cat"><thead><tr><th>Rodzaj składki</th><th>Kto płaci</th><th class="n">Wpłaty</th><th class="n">Wartość</th><th class="n">Zmiana</th><th class="n">Zmiana %</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6" class="muted">Brak kategorii w tym stanie.</td></tr>'}</tbody>
+      <tfoot><tr><th colspan="2">Suma kategorii</th><th class="n">${pz(st.wplaty)}</th><th class="n">${pz(sumV)}</th><th class="n ${cls(st.zmiana)}">${pzS(st.zmiana)}</th><th class="n">${pct(st.zmiana_pct)}</th></tr></tfoot></table></div>`;
+    const ctl = st.kontrola === 'EXACT' ? '<span class="pos">✓ suma wartości kategorii = wartość całkowita wg instytucji</span>' :
+      st.kontrola === 'ROUNDING' ? `<span class="pos">✓ suma kategorii zgodna z wartością całkowitą (różnica zaokrągleń ${pz(st.roznica)})</span>` :
+      st.kontrola === 'MISMATCH' ? `<span class="warn">Suma wartości kategorii różni się od wartości całkowitej o ${pz(st.roznica)} – sprawdź wpisane kwoty.</span>` :
+      '<span class="warn">Nie wszystkie kategorie mają wartość – nie da się sprawdzić sumy.</span>';
+    h += `<p class="note">${ctl}</p>`;
+    const warns = a.ostrzezenia.filter(w => !(st.kontrola === 'MISMATCH' && w.startsWith('Suma wartości')));
+    if (warns.length) h += '<ul class="notes">' + warns.map(w => `<li class="warn">${esc(w)}</li>`).join('') + '</ul>';
+    h += a.historia.length >= 2 ? `<h3 class="set-h">Historia</h3><div class="ppk-chart" id="ppk-chart-${a.id}"></div><div class="legend"><span><span class="sw" style="background:var(--c1)"></span>Wartość</span><span><span class="sw" style="background:var(--c2)"></span>Łączne wpłaty</span><span class="muted">punkty = wpisane stany; między nimi linia prosta (instytucja nie podaje dziennych wartości)</span></div>`
+      : '<p class="note muted">Wykres pojawi się po wpisaniu drugiego stanu – np. za miesiąc albo stanu z wcześniejszego wyciągu (data wyceny z przeszłości).</p>';
+    h += `<details class="ppk-hist"><summary>Wpisane stany (${a.historia.length})</summary><div class="table-wrap"><table><thead><tr><th>Data wyceny</th><th class="n">Wartość</th><th class="n">Łączne wpłaty</th><th class="n">Zmiana</th><th>Wpisano</th></tr></thead><tbody>` +
+      a.historia.slice().reverse().map(x => `<tr><td>${dpl(x.data_wyceny)}${x.poprawka ? ' <span class="badge" title="Zastąpił wcześniej wpisany stan z tego dnia (poprzedni zostaje w bazie)">poprawka</span>' : ''}</td><td class="n">${pz(x.wartosc)}</td><td class="n">${pz(x.wplaty)}</td><td class="n ${cls(x.zmiana)}">${pzS(x.zmiana)}</td><td class="muted">${x.wpisano ? new Date(x.wpisano).toLocaleDateString('pl-PL') : ''}${x.zrodlo === 'WKLEJONY_TEKST' ? ' · z tekstu' : ''}</td></tr>`).join('') +
+      '</tbody></table></div></details>';
+    return h + '<div class="acts"><button class="btn primary" data-a="snap">＋ Wpisz nowy stan</button> <button class="btn ghost" data-a="del">Usuń rachunek z listy</button></div></div>';
+  }
+  function renderPpk() {
+    const P = S.ppk; if (!P) return;
+    syncSettings(P.ustawienia);
+    const accs = P.rachunki;
+    $('#ppk-new-acc-h').textContent = accs.length ? 'Dodaj kolejny rachunek PPK' : 'Dodaj rachunek PPK';
+    $('#ppk-accounts').innerHTML = accs.length ? accs.map(ppkAccHtml).join('') + (S.ppkAdd ? '' : '<button class="linkbtn" id="ppk-add-more" type="button">＋ dodaj kolejny rachunek PPK</button>')
+      : '<p class="muted">Nie masz jeszcze rachunku PPK. Dodaj go poniżej (dane ze strony instytucji), a potem wpisz jego stan.</p>';
+    $('#ppk-new-acc').hidden = accs.length > 0 && !S.ppkAdd;
+    $('#ppk-add-more').onclick = () => { S.ppkAdd = true; renderPpk(); $('#ppk-new-acc').scrollIntoView({behavior: 'smooth', block: 'start'}); };
+    $$('#ppk-accounts .ppk-acc').forEach(el => {
+      const a = accs.find(x => String(x.id) === el.dataset.id);
+      el.querySelector('[data-a=snap]').onclick = () => openPpkSnap(a);
+      el.querySelector('[data-a=del]').onclick = async () => {
+        if (!confirm(`Usunąć rachunek „${a.nazwa}” z listy? Wpisane stany zostają w bazie, ale przestaną być pokazywane i liczone.`)) return;
+        try { await post(`/api/ppk/konto/${a.id}/usun`); toast('Usunięto rachunek z listy.'); $('#ppk-snap').hidden = true; loadPpk(); loadLive({fast: true}); if (S.settings && S.settings.include_ppk) loadHistory(); } catch (e) { toast(e.message); }
+      };
+      if (a.historia.length >= 2) {
+        const pts = a.historia.map(x => ({t: new Date(x.data_wyceny + 'T00:00:00').getTime(), date: x.data_wyceny, value: +x.wartosc, paid: x.wplaty === null ? null : +x.wplaty}));
+        const tip = p => `<b>${dpl(p.date)}</b><div class="r"><span>Wartość</span><b>${pz(p.value)}</b></div><div class="r"><span>Łączne wpłaty</span><b>${pz(p.paid)}</b></div>` +
+          (p.paid !== null ? `<div class="r"><span>Zmiana</span><b class="${cls(p.value - p.paid)}">${pzS(p.value - p.paid)}</b></div>` : '');
+        const ch = new Charts.TimeChart($('#ppk-chart-' + a.id), {height: 220, navigator: false, minSpan: 7 * Charts.DAY, fmtY: v => nf0.format(v), fmtTip: tip,
+          series: [{key: 'value', label: 'Wartość', color: 'var(--c1)', area: true, width: 1.8}, {key: 'paid', label: 'Łączne wpłaty', color: 'var(--c2)', width: 1.6}]});
+        ch.setData(pts);
+      }
+    });
+  }
+  // formularz stanu: kategorie z bazy, podpowiedzi z poprzedniego stanu, sumy na biezaco
+  let ppkSrc = 'RECZNIE';
+  function openPpkSnap(a) {
+    const P = S.ppk, prev = {}; (a.kategorie || []).forEach(c => { prev[c.kod] = c; });
+    S.ppkAcc = a.id; ppkSrc = 'RECZNIE';
+    $('#ppk-snap-acc').textContent = a.nazwa + ' · ' + a.fundusz + (a.stan ? ' · poprzedni stan z ' + dpl(a.stan.data_wyceny) + ' (szare podpowiedzi)' : '');
+    const f = $('#ppk-snap-form'); f.reset(); f.data_wyceny.value = new Date().toISOString().slice(0, 10);
+    f.wartosc.placeholder = a.stan ? nf2.format(a.stan.wartosc) : '0,00';
+    const ph = (c, k) => prev[c] && prev[c][k] !== null ? nf2.format(prev[c][k]) : '';
+    $('#ppk-snap-lines tbody').innerHTML = P.kategorie.map(c => `<tr data-k="${c.kod}"><td>${esc(c.nazwa)}</td><td>${PAYER[c.platnik] || ''}</td>
+      <td class="n"><input name="p_${c.kod}" inputmode="decimal" placeholder="${ph(c.kod, 'wplaty')}"></td>
+      <td class="n"><input name="v_${c.kod}" inputmode="decimal" placeholder="${ph(c.kod, 'wartosc')}"></td></tr>`).join('');
+    $('#ppk-paste').value = ''; $('#ppk-paste-notes').innerHTML = '';
+    $('#ppk-snap').hidden = false; ppkSums(); $('#ppk-snap').scrollIntoView({behavior: 'smooth', block: 'start'});
+  }
+  function ppkSums() {
+    const f = $('#ppk-snap-form'); let sp = 0, sv = 0, np = 0, nv = 0, bad = false;
+    $$('#ppk-snap-lines tbody tr').forEach(tr => {
+      const p = tr.querySelector('input[name^=p_]').value, v = tr.querySelector('input[name^=v_]').value;
+      if (p.trim()) { const x = amt(p); if (x === null) bad = true; else { sp += x; np++; } }
+      if (v.trim()) { const x = amt(v); if (x === null) bad = true; else { sv += x; nv++; } }
+    });
+    $('#ppk-sum-paid').textContent = np ? pz(sp) : '—'; $('#ppk-sum-val').textContent = nv ? pz(sv) : '—';
+    const tot = amt(f.wartosc.value);
+    $('#ppk-check').innerHTML = bad ? '<span class="warn">Któraś kwota jest niepoprawna (wpisz np. 1 234,56).</span>' :
+      tot === null || !nv ? '' : Math.abs(tot - sv) < 0.005 ? '<span class="pos">✓ Suma wartości kategorii = wartość całkowita</span>' :
+      `<span class="warn">Suma wartości kategorii różni się od wartości całkowitej o ${pz(tot - sv)} – sprawdź kwoty (zapis jest możliwy, różnica będzie widoczna w kontroli liczb).</span>`;
+  }
+  $('#ppk-snap-form').addEventListener('input', ppkSums);
+  $('#ppk-snap-cancel').onclick = () => { $('#ppk-snap').hidden = true; };
+  $('#ppk-snap-form').onsubmit = async e => {
+    e.preventDefault(); const f = e.target, b = f.querySelector('button[type=submit]'); b.disabled = true;
+    const linie = {}; $$('#ppk-snap-lines tbody tr').forEach(tr => { linie[tr.dataset.k] = {wplaty: tr.querySelector('input[name^=p_]').value, wartosc: tr.querySelector('input[name^=v_]').value}; });
+    try {
+      const r = await post(`/api/ppk/konto/${S.ppkAcc}/stan`, {data_wyceny: f.data_wyceny.value, wartosc: f.wartosc.value, linie, zrodlo: ppkSrc});
+      toast(r.wynik === 'DUPLICATE' ? 'Ten stan jest już zapisany – nic nie zmieniono.' : r.wynik === 'CORRECTION' ? 'Zastąpiono stan z tego dnia (poprzedni zostaje w historii).' : 'Zapisano stan PPK.');
+      $('#ppk-snap').hidden = true; await loadPpk(); loadLive({fast: true}); loadAudit(); if (S.settings && S.settings.include_ppk) loadHistory();
+    } catch (err) { toast(err.message); } finally { b.disabled = false; }
+  };
+  $('#ppk-paste-btn').onclick = async () => {
+    const f = $('#ppk-snap-form');
+    try {
+      const d = await post('/api/ppk/odczytaj', {tekst: $('#ppk-paste').value});
+      const pl = v => v === null || v === undefined ? '' : nf2.format(+v);
+      if (d.data_wyceny) f.data_wyceny.value = d.data_wyceny;
+      if (d.wartosc_calkowita) f.wartosc.value = pl(d.wartosc_calkowita);
+      Object.entries(d.linie || {}).forEach(([k, x]) => { const tr = $(`#ppk-snap-lines tr[data-k="${k}"]`); tr.querySelector('input[name^=p_]').value = pl(x.wplaty); tr.querySelector('input[name^=v_]').value = pl(x.wartosc); });
+      const n = Object.keys(d.linie || {}).length; if (n) ppkSrc = 'WKLEJONY_TEKST';
+      $('#ppk-paste-notes').innerHTML = `<li>Uzupełniono: ${n} ${n === 1 ? 'kategorię' : 'kategorii'}${d.wartosc_calkowita ? ', wartość całkowitą' : ''}${d.data_wyceny ? ', datę wyceny' : ''}. Sprawdź pola i zapisz.</li>` +
+        (d.uwagi || []).map(u => `<li class="warn">${esc(u)}</li>`).join('');
+      ppkSums();
+    } catch (e) { toast(e.message); }
+  };
+  $('#ppk-acc-form').onsubmit = async e => {
+    e.preventDefault(); const f = e.target, b = f.querySelector('button'); b.disabled = true;
+    try {
+      const r = await post('/api/ppk/konto', Object.fromEntries(new FormData(f))); f.reset(); toast('Dodano rachunek – wpisz teraz jego stan.'); S.ppkAdd = false;
+      await loadPpk(); const a = S.ppk.rachunki.find(x => x.id === r.id); if (a) openPpkSnap(a);
+    } catch (err) { toast(err.message); } finally { b.disabled = false; }
   };
 
   // ---------------------------------------------------------------- import (panel boczny)

@@ -142,6 +142,8 @@ def run(conn, scope_code, brokers=("XTB", "TR")):
 
     # 3a. lokaty (gotowka oprocentowana; core/deposits.py)
     deps = _deposit_checks(cur, scope_code, accounts, add)
+    if scope_code == "INVESTMENT_ALL":                    # PPK: wspolne dla calej aplikacji, sprawdzane raz (zakladka WSZYSTKIE)
+        _ppk_checks(cur, add)
 
     # 4. ilosci wzgledem raportu brokera (stan na dzien eksportu) - dla kont, ktorych eksport zawiera stan pozycji (np. XTB)
     cur.execute("select exists (select 1 from broker_position_snapshots where account_id = any(%s))", (accounts,))
@@ -206,6 +208,82 @@ def _deposit_checks(cur, scope_code, accounts, add):
         parts = sum((dep.scope_deposits(cur, b.scope_code)["value"] for b in _brokers()), D(0))
         add(f"WSZYSTKIE = {_names()}: lokaty", abs(parts - sd["value"]) <= TOL, f"{parts.quantize(TOL)} vs {_dec(sd['value']).quantize(TOL)}")
     return sd["value"]
+
+
+def _ppk_checks(cur, add):
+    """PPK (core/ppk.py): liczby zakladki PPK przeliczone niezaleznie z tabel bazowych (ppk_snapshots, ppk_snapshot_lines - bez widokow
+    v_ppk_*): obowiazujacy stan = najpozniejsza data wyceny, z tej daty wersja niezastapiona poprawka; laczne wplaty = suma wplat wierszy
+    (tylko gdy kazdy wiersz ma wplaty); zmiana = wartosc - laczne wplaty; ponad wlasne = wartosc - wplaty pracownika."""
+    cur.execute("select to_regclass('ppk_snapshots') is not null")
+    if not cur.fetchone()[0]:
+        return
+    cur.execute("""select ra.account_id, a.display_name from retirement_accounts ra join accounts a using (account_id) where ra.status = 'ACTIVE' order by 1""")
+    accs = cur.fetchall()
+    if not accs:
+        return
+    from invapp.core import ppk
+    shown = {x["id"]: x for x in ppk.overview(cur)}
+    for aid, name in accs:
+        cur.execute("""select s.snapshot_id, s.valuation_date, s.institution_total_value from ppk_snapshots s
+                       where s.account_id = %s and not exists (select 1 from ppk_snapshots n where n.supersedes_snapshot_id = s.snapshot_id)
+                       order by s.valuation_date desc, s.entered_at desc, s.snapshot_id desc limit 1""", (aid,))
+        r = cur.fetchone()
+        if not r:
+            continue
+        sid, vd, total = r
+        cur.execute("""select c.payer, l.paid_in, l.value from ppk_snapshot_lines l join ppk_contribution_categories c using (category_code)
+                       where l.snapshot_id = %s""", (sid,))
+        lines = cur.fetchall()
+        vals_known = bool(lines) and all(v is not None for _, _, v in lines)
+        paid_known = bool(lines) and all(p is not None for _, p, _ in lines)
+        own_rows = [p for payer, p, _ in lines if payer == "EMPLOYEE"]
+        sum_val = sum((_dec(v) for _, _, v in lines if v is not None), D(0))
+        exp_paid = sum((_dec(p) for _, p, _ in lines), D(0)) if paid_known else None
+        exp_own = sum((_dec(p) for p in own_rows), D(0)) if (own_rows and all(p is not None for p in own_rows)) else None
+        st = (shown.get(aid) or {}).get("stan") or {}
+        if vals_known:
+            diff = _dec(total) - sum_val
+            add(f"PPK „{name}”: suma wartości składek = wartość całkowita wg instytucji ({vd})", abs(diff) <= TOL * len(lines),
+                f"wartość {_dec(total).quantize(TOL)}, suma składek {sum_val.quantize(TOL)}, różnica {diff.quantize(TOL)}")
+        else:
+            add(f"PPK „{name}”: suma wartości składek = wartość całkowita wg instytucji ({vd})", False,
+                "nie wszystkie składki mają wpisaną wartość – sumy nie da się sprawdzić", "OSTRZEZENIE")
+
+        def same(a, b):
+            return (a is None and b is None) or (a is not None and b is not None and abs(_dec(a) - _dec(b)) <= TOL)
+        exp = {"wartosc": _dec(total), "wplaty": exp_paid, "zmiana": (_dec(total) - exp_paid) if exp_paid is not None else None,
+               "wplaty_wlasne": exp_own, "ponad_wlasne": (_dec(total) - exp_own) if exp_own is not None else None}
+        bad = [k for k, v in exp.items() if not same(st.get(k), v)] + (["data_wyceny"] if st.get("data_wyceny") != vd else [])
+        add(f"PPK „{name}”: wartość, łączne wpłaty, zmiana i „ponad Twoje wpłaty” w zakładce = przeliczenie z wpisanych składek", not bad,
+            ("różne: " + ", ".join(bad)) if bad else "")
+        from datetime import date
+        age = (date.today() - vd).days
+        add(f"PPK „{name}”: stan nie starszy niż {ppk.STALE_DAYS} dni", age <= ppk.STALE_DAYS, f"ostatni stan z {vd} ({age} dni temu)", "OSTRZEZENIE")
+        if _settings(cur).get("include_ppk"):
+            _ppk_model_check(cur, aid, name, add)
+
+
+def _ppk_model_check(cur, aid, name, add):
+    """PPK w portfelu (include_ppk): historia odtworzona modelem (core/ppk.account_model) musi trafiac w kazdy wpisany stan - wplaty odtworzone
+    do dnia stanu = suma wplat skladek stanu (SQL na tabelach bazowych), wartosc modelu w dniu stanu = wartosc wg instytucji."""
+    from datetime import date
+    from invapp.core import ppk
+    cur.execute("select joined_on from retirement_accounts where account_id = %s", (aid,))
+    joined = cur.fetchone()[0]
+    m = ppk.account_model(cur, aid, joined, date.today())
+    if m is None:
+        add(f"PPK „{name}” w portfelu: historia odtworzona z wpisanych stanów", False,
+            "najnowszy stan nie ma wpłat wszystkich składek – PPK liczone tylko w wartości, bez zysku i wykresu", "OSTRZEZENIE")
+        return
+    cur.execute("""select s.valuation_date, s.institution_total_value, (select sum(l.paid_in) from ppk_snapshot_lines l where l.snapshot_id = s.snapshot_id)
+                   from ppk_snapshots s where s.account_id = %s and s.paid_in_complete
+                     and not exists (select 1 from ppk_snapshots n where n.supersedes_snapshot_id = s.snapshot_id) order by 1""", (aid,))
+    bad = []
+    for day, value, paid in cur.fetchall():
+        flows = sum((f for d, f in m["flows"] if d <= day), D(0))
+        if abs(flows - _dec(paid)) > TOL or abs(_dec(m["daily"].get(day)) - _dec(value)) > TOL:
+            bad.append(f"{day}: wpłaty {flows} vs {_dec(paid)}, wartość {m['daily'].get(day)} vs {_dec(value)}")
+    add(f"PPK „{name}” w portfelu: odtworzone wpłaty i wartość = każdy wpisany stan", not bad, "; ".join(bad))
 
 
 def _currency_checks(cur, accounts, s, st, add):

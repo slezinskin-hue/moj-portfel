@@ -6,7 +6,8 @@ Zakladki tworza sie z listy brokerow (invapp.brokers.BROKERS) + zakladka WSZYSTK
 """
 import threading
 import time as _time
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal
 
 import psycopg2
 import psycopg2.extras
@@ -289,15 +290,25 @@ def position_data(scope_key="all", listing_id=0):
 
 
 def add_cash(scope, conn, scope_key, code):
-    """Wartosc CALEGO portfela (kafelek) = aktywa inwestycyjne + gotowka z kont bankowych i wolne srodki XTB - tylko gdy wlaczone w ustawieniach
+    """Wartosc CALEGO portfela (kafelek) = aktywa inwestycyjne + gotowka z kont bankowych, wolne srodki XTB i PPK - tylko gdy wlaczone w ustawieniach
     (core/cash.py; domyslnie wylaczone). assets_value (inwestycje) zostaje bez zmian - z niego licza sie wykres i wskazniki."""
     from invapp.core import cash
     try:
         ex = cash.extra_value(conn.cursor(), scope_key, code)
     except psycopg2.Error:              # baza sprzed migracji 0017
-        conn.rollback(); ex = {"gotowka": 0, "wolne_xtb": 0, "ustawienia": dict(cash.DEFAULTS)}
-    scope["cash_value"], scope["xtb_free_value"] = ex["gotowka"], ex["wolne_xtb"]
-    scope["total_value"] = scope["assets_value"] + ex["gotowka"] + ex["wolne_xtb"]
+        conn.rollback(); ex = {"gotowka": 0, "wolne_xtb": 0, "ppk": 0, "ustawienia": dict(cash.DEFAULTS)}
+    scope["cash_value"], scope["xtb_free_value"], scope["ppk_value"] = ex["gotowka"], ex["wolne_xtb"], ex["ppk"]
+    modeled = 0
+    if ex["ppk"]:                       # PPK w portfelu (include_ppk, tylko WSZYSTKIE): wartosc do aktywow, zysk = wartosc - laczne wplaty (core/ppk.model)
+        from invapp.core import ppk
+        m = ppk.model(conn.cursor())
+        scope["ppk_unmodeled"] = m["unmodeled"]
+        if m["flows"]:
+            modeled = m["value"]
+            scope["assets_value"] += modeled
+            scope["total_result_live"] += m["gain"]
+            scope["ppk_gain"], scope["ppk_paid"], scope["ppk_modeled_value"] = m["gain"], m["paid"], modeled
+    scope["total_value"] = scope["assets_value"] + ex["gotowka"] + ex["wolne_xtb"] + (ex["ppk"] - modeled)   # rachunek PPK bez kompletnych wplat - tylko wartosc
     scope["settings"] = ex["ustawienia"]
 
 
@@ -368,6 +379,18 @@ def cash_data(scope_key="all"):
         conn.close()
 
 
+def ppk_data():
+    """Zakladka PPK (core/ppk.py): kwoty zawsze w PLN - stany PPK to kwoty z wyciagu instytucji bez dat poszczegolnych wplat,
+    wiec przeliczenie wplat po kursie z dnia wplaty (jak w docs/WALUTA.md) nie jest mozliwe."""
+    from invapp.core import cash, ppk
+    conn = _connect(readonly=True)
+    try:
+        cur = conn.cursor()
+        return {"rachunki": ppk.overview(cur), "kategorie": ppk.categories(cur), "ustawienia": cash.get_settings(cur), "waluta": _display(cur)}
+    finally:
+        conn.close()
+
+
 def deposits_of(conn, code):
     from invapp.core import deposits
     try:
@@ -399,6 +422,9 @@ def history_data(scope_key="all"):
             if hit and _time.time() - hit[0] < HIST_TTL:
                 return hit[1]
         s = history.build_series(conn, code)
+        if code == scope_code("all"):                         # PPK tylko w portfelu WSZYSTKIE
+            _merge_ppk(conn.cursor(), s)
+            _add_parts(conn, s)
         try:                                                    # indeksy do porownania (wykres "Zwrot %"), w PLN, na dni serii
             s["porownanie"] = benchmarks.levels(conn, [date.fromisoformat(p["date"]) for p in s["series"]])
         except psycopg2.Error:
@@ -417,6 +443,64 @@ def history_data(scope_key="all"):
     with _lock:
         _cache["hist"][(code, w)] = (_time.time(), s)
     return s
+
+
+def _merge_ppk(cur, s):
+    """PPK w serii portfela WSZYSTKIE (ustawienie include_ppk): wartosc dnia z modelu (core/ppk.model - szacowana miedzy stanami)
+    i wplaty PPK (wszystkie skladki) jako wplaty brutto w ich (odtworzonych) dniach. Seria zaczyna sie wczesniej, jesli PPK jest starsze."""
+    from invapp.core import cash, ppk
+    try:
+        if not cash.get_settings(cur)["include_ppk"]:
+            return
+        m = ppk.model(cur)
+    except psycopg2.Error:
+        cur.connection.rollback(); return
+    if not m["daily"]:
+        return
+    series, D0 = s["series"], Decimal(0)
+    first = date.fromisoformat(series[0]["date"]) if series else date.today() + timedelta(days=1)
+    pre, d = [], m["start"]
+    while d < first and d <= date.today():
+        pre.append({"date": d.isoformat(), "value": D0, "securities": D0, "deposits": D0, "invested_gross": D0, "sold": D0, "invested_net": D0,
+                    "gain": D0, "positions": 0, "estimated_positions": 0})
+        d += timedelta(days=1)
+    series = pre + series
+    flows, fi, cum = m["flows"], 0, D0
+    for p in series:
+        day = date.fromisoformat(p["date"])
+        while fi < len(flows) and flows[fi][0] <= day:
+            cum += flows[fi][1]; fi += 1
+        v = m["daily"].get(day, D0) if day >= m["start"] else D0
+        p["ppk"] = v
+        p["value"] = p["value"] + v
+        p["invested_gross"] = p["invested_gross"] + cum
+        p["invested_net"] = p["invested_gross"] - p["sold"]
+        p["gain"] = p["value"] - p["invested_net"]
+    s["series"] = series
+    if pre:
+        s["first_date"] = series[0]["date"]
+    s["ppk"] = {"od": m["start"].isoformat(), "wplaty": m["paid"], "wartosc": m["value"], "bez_modelu": m["unmodeled"]}
+
+
+def _add_parts(conn, s):
+    """Skladniki wartosci portfela WSZYSTKIE na wykresie (do wlaczania/wylaczania): kazdy broker (seria jego zakresu - te same zasady)
+    i PPK (gdy wliczane). Pola "c_<kod>" w kazdym dniu; suma skladnikow = wartosc dnia (test)."""
+    from invapp.pricing import history
+    series, parts = s["series"], []
+    for b in brokers.BROKERS:
+        bs = history.build_series(conn, b.scope_code)["series"]
+        if not bs:
+            continue
+        val = {p["date"]: p["value"] for p in bs}
+        key = "c_" + b.code
+        for p in series:
+            p[key] = val.get(p["date"], Decimal(0))
+        parts.append({"key": key, "label": b.name})
+    if s.get("ppk"):
+        for p in series:
+            p["c_PPK"] = p.get("ppk", Decimal(0))
+        parts.append({"key": "c_PPK", "label": "PPK"})
+    s["skladniki"] = parts
 
 
 def invalidate_history():

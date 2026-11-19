@@ -31,7 +31,7 @@
   </div>
   {% if d.has_data %}
   <nav class="subnav">
-    <a class="vtab on" data-v="portfel" href="#/portfel">Portfel</a><a class="vtab" data-v="analiza" href="#/analiza">Analiza</a><a class="vtab" data-v="dochody" href="#/dochody">Dochody</a><a class="vtab" data-v="ekspozycja" href="#/ekspozycja">Ekspozycja</a><a class="vtab" data-v="gotowka" href="#/gotowka">Gotówka</a><a class="vtab" data-v="symulacje" href="#/symulacje">Symulacje</a><a class="vtab" data-v="dane" href="#/dane">Dane</a>
+    <a class="vtab on" data-v="portfel" href="#/portfel">Portfel</a><a class="vtab" data-v="analiza" href="#/analiza">Analiza</a><a class="vtab" data-v="dochody" href="#/dochody">Dochody</a><a class="vtab" data-v="ekspozycja" href="#/ekspozycja">Ekspozycja</a><a class="vtab" data-v="gotowka" href="#/gotowka">Gotówka</a><a class="vtab" data-v="ppk" href="#/ppk">PPK</a><a class="vtab" data-v="symulacje" href="#/symulacje">Symulacje</a><a class="vtab" data-v="dane" href="#/dane">Dane</a>
     <span class="spacer"></span><span class="exp-btns"><button class="btn ghost" id="exp-xlsx" title="Pobierz arkusz Excel z pozycjami, historią, dochodami i wskaźnikami">⤓ Excel</button><button class="btn ghost" id="exp-pdf" title="Raport do druku lub zapisu jako PDF">⎙ PDF</button></span>
   </nav>
   {% endif %}
@@ -234,6 +234,10 @@
     <p><b>Wykres i wskaźniki</b>: dla kont bez lokaty wpłata = zakup, wypłata = sprzedaż; dla konta z lokatą wpłata = przelew na konto, wypłata = przelew z konta, a odsetki są zwrotem. Dywidendy i nagrody są dochodem dodatkowym (poza wykresem). Wartość historyczna = ilość × cena zamknięcia dnia × kurs dnia (ceny skorygowane o splity); dni bez ceny są oznaczone jako oszacowane.</p>
     <p><b>TWR</b> łączy dzienne stopy zwrotu niezależnie od wpłat; <b>mapa miesięcznych zwrotów</b> to TWR każdego miesiąca; <b>XIRR</b> to roczna stopa uwzględniająca moment i wielkość wpłat (Twój faktyczny wynik); <b>obsunięcie</b> to spadek indeksu TWR od szczytu.</p>
     <p><b>Gotówka</b> (konta bankowe wpisane ręcznie, wolne środki XTB) jest doliczana tylko do bieżącej wartości portfela i tylko po włączeniu w zakładce „Gotówka”; zysk, wpłaty, wykresy i wskaźniki jej nie obejmują. <b>Lokaty</b> (np. gotówka oprocentowana w Trade Republic) są osobną częścią portfela, zawsze w jego wartości.</p>
+    <p><b>PPK</b> (zakładka „PPK”): stany przepisane z wyciągu instytucji. Wartość = wartość podana przez instytucję; łączne wpłaty = suma wpłat wszystkich kategorii (Twoich, pracodawcy i państwa);
+      zmiana = wartość − łączne wpłaty (orientacyjna – bez dat poszczególnych wpłat nie da się policzyć stopy zwrotu); „ponad Twoje wpłaty” = wartość − wpłaty pracownika.
+      Po włączeniu „Uwzględniaj PPK” PPK wchodzi do portfela WSZYSTKIE: wartość, wpłaty (wszystkie składki), zysk (wartość − łączne wpłaty) oraz wykres
+      i wskaźniki z historii odtworzonej modelem (dni wpłat z reguł PPK, wartość między stanami – stała stopa dopasowana do stanów).</p>
   </div></details>
   </div>
 
@@ -262,6 +266,52 @@
     <section class="card">
       <div class="card-h"><h2>Wolne środki u brokerów</h2><span class="hint">z eksportów (saldo gotówki z księgi, bez oprocentowania)</span></div>
       <div class="table-wrap"><table id="cash-brk"><thead><tr><th>Konto</th><th>Rodzaj</th><th class="n">Saldo</th><th>Jak liczone</th></tr></thead><tbody></tbody></table></div>
+    </section>
+  </div>
+
+  <div class="view" data-view="ppk" hidden>
+    <section class="card">
+      <div class="card-h"><h2>PPK</h2><span class="hint">dane przepisujesz ze strony instytucji (np. PKO TFI) · wspólne dla wszystkich portfeli · kwoty w PLN</span></div>
+      <div id="ppk-accounts"></div>
+      <div class="settings">
+        <label class="check"><input type="checkbox" data-set="include_ppk"> <span><b>Uwzględniaj PPK</b> w wartości portfela <span class="muted">(portfel WSZYSTKIE)</span></span></label>
+        <p class="note">Po włączeniu PPK jest częścią portfela WSZYSTKIE: <b>wartość</b>, <b>wpłaty</b> (wszystkie składki – Twoje, pracodawcy i państwa),
+          <b>zysk</b> (linia „PPK” = wartość − łączne wpłaty), <b>wykres i wskaźniki</b>. Instytucja podaje tylko stany na dzień wyceny, więc historia jest
+          <b>szacowana</b>: składki co miesiąc 15. dnia, wpłata powitalna po 3 pełnych miesiącach (po kwartale), dopłata roczna 15 kwietnia; wartość między
+          stanami rośnie stałą stopą dobraną tak, by każdy wpisany stan zgadzał się co do grosza. Portfele XTB i Trade Republic bez zmian.</p>
+      </div>
+    </section>
+    <section class="card" id="ppk-new-acc" hidden>
+      <div class="card-h"><h2 id="ppk-new-acc-h">Dodaj rachunek PPK</h2><span class="hint">raz – potem wpisujesz już tylko stany</span></div>
+      <form id="ppk-acc-form" class="iform" autocomplete="off">
+        <label>Nazwa<input name="nazwa" maxlength="80" placeholder="PPK"></label>
+        <label>Instytucja<input name="instytucja" maxlength="80" placeholder="np. PKO TFI" required></label>
+        <label>Fundusz<input name="fundusz" maxlength="120" placeholder="np. PKO Emerytura 2055" required></label>
+        <label>Rok docelowy<input name="rok_docelowy" inputmode="numeric" maxlength="4" placeholder="np. 2055" style="width:7em"></label>
+        <label>Data przystąpienia<input name="data_przystapienia" type="date" required></label>
+        <button class="btn primary" type="submit">＋ Dodaj rachunek</button>
+      </form>
+    </section>
+    <section class="card" id="ppk-snap" hidden>
+      <div class="card-h"><h2>Wpisz stan rachunku</h2><span class="hint" id="ppk-snap-acc"></span></div>
+      <details class="paste"><summary>Mam tekst ze strony instytucji – uzupełnij pola za mnie</summary>
+        <p class="note">Skopiuj ze strony instytucji tabelę składek (np. „Składka podstawowa pracownika 6 951,62 9 474,33”) i wklej poniżej. Aplikacja tylko <b>wypełni pola</b> –
+          sprawdzasz je i zatwierdzasz sam. Wklejony tekst nie jest nigdzie zapisywany (może zawierać np. nazwę pracodawcy albo numer rejestru).</p>
+        <textarea id="ppk-paste" rows="6" placeholder="Wklej tutaj tekst ze strony instytucji…"></textarea>
+        <div class="acts"><button class="btn" id="ppk-paste-btn" type="button">Uzupełnij pola z tekstu</button></div>
+        <ul id="ppk-paste-notes" class="notes"></ul>
+      </details>
+      <form id="ppk-snap-form" autocomplete="off">
+        <div class="iform" style="border-top:0;margin-top:0">
+          <label>Data wyceny<input name="data_wyceny" type="date" required></label>
+          <label>Wartość całkowita rachunku<input name="wartosc" inputmode="decimal" placeholder="0,00" required></label>
+        </div>
+        <div class="table-wrap"><table id="ppk-snap-lines"><thead><tr><th>Rodzaj składki</th><th>Kto płaci</th><th class="n">Wpłaty narastająco</th><th class="n">Wartość</th></tr></thead><tbody></tbody>
+          <tfoot><tr><th colspan="2">Suma kategorii</th><th class="n" id="ppk-sum-paid">—</th><th class="n" id="ppk-sum-val">—</th></tr></tfoot></table></div>
+        <p class="note" id="ppk-check"></p>
+        <p class="note">Puste pole = brak danych (nie zero). Jeśli instytucja pokazuje 0,00 – wpisz 0,00. Stan z tą samą datą wpisany ponownie z innymi liczbami zastępuje poprzedni (poprzedni zostaje w historii).</p>
+        <div class="acts"><button class="btn primary" type="submit">Zapisz stan</button> <button class="btn ghost" type="button" id="ppk-snap-cancel">Anuluj</button></div>
+      </form>
     </section>
   </div>
 
@@ -344,6 +394,8 @@
     <h3 class="set-h">Gotówka w wartości portfela</h3>
     <label class="check"><input type="checkbox" data-set="include_cash"> <span>Uwzględniaj gotówkę z kont bankowych <span class="muted">(zakładka „Gotówka”)</span></span></label>
     <label class="check"><input type="checkbox" data-set="include_xtb_free"> <span>Uwzględniaj wolne środki XTB</span></label>
+    <h3 class="set-h">PPK w wartości portfela</h3>
+    <label class="check"><input type="checkbox" data-set="include_ppk"> <span>Uwzględniaj PPK <span class="muted">(zakładka „PPK”, portfel WSZYSTKIE)</span></span></label>
     <div class="acts"><button class="btn primary" id="set-close">Gotowe</button></div>
   </div>
 </div>

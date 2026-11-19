@@ -10,7 +10,7 @@ Publiczne repozytorium (GitHub), instalator Inno Setup, aktualizacje z wydań (G
   i listy kontrolne przed commitem / wydaniem.
 * `docs/ARCHITEKTURA.md` – mapa kodu, zasady liczenia, lokaty, ustawienia, wydajność.
 * Dodawanie: **brokera** → `docs/DODAWANIE_BROKERA.md` (generator `python -m invapp.tools.nowy_broker`), **modułu / zakładki** →
-  `docs/DODAWANIE_MODULU.md`, **PPK** → `docs/PPK.md`. Praca nad zmianami i wydania → `docs/ROZWOJ.md`, instalator → `docs/INSTALATOR.md`.
+  `docs/DODAWANIE_MODULU.md`, **PPK** (moduł od 0.5.0) → `docs/PPK.md`. Praca nad zmianami i wydania → `docs/ROZWOJ.md`, instalator → `docs/INSTALATOR.md`.
 
 ## Polecenia (Windows, w folderze repozytorium)
 
@@ -18,7 +18,7 @@ Publiczne repozytorium (GitHub), instalator Inno Setup, aktualizacje z wydań (G
 python uruchom.py                                   # wersja ze źródeł, dane testowe %LOCALAPPDATA%\AplikacjaInwestycyjna-dev
 python -m invapp --no-browser --port 8770           # sam serwer (np. do pomiarów); --data-dir D:\proba = inne dane
 python -m invapp.tools.kopiuj_dane                  # kopia prawdziwych danych do wersji testowej (obie aplikacje zamknięte)
-python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow tests.test_pozycje tests.test_waluta
+python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow tests.test_pozycje tests.test_waluta tests.test_ppk
 ```
 
 Testy lokalne na prawdziwych eksportach (pliki w `export/`, testy w `.gitignore`) i mutacje: `docs/ROZWOJ.md`.
