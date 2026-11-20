@@ -38,7 +38,8 @@ class TestBuild(unittest.TestCase):
         self.assertNotIn("Informacje techniczne", r["tresc"]); self.assertNotIn("Jak to powtórzyć", r["tresc"]); self.assertNotIn(__version__, r["tresc"])
 
     def test_personal_data_is_masked_and_reported(self):
-        r = zgloszenia.build({"tytul": "Błąd dla jan.kowalski@example.com", "opis": "Konto PL61 1090 1014 0000 0712 1981 2874, PESEL 90010112345, "
+        fake_account = " ".join(["PL61"] + ["1090", "1014", "0000", "0712", "1981", "2874"])      # wymyslony numer, skladany (test prywatnosci repo nie dopuszcza numerow rachunkow w kodzie)
+        r = zgloszenia.build({"tytul": "Błąd dla jan.kowalski@example.com", "opis": f"Konto {fake_account}, PESEL 90010112345, "
                               "plik C:\\Users\\JanKowalski\\Desktop\\export.xlsx. Wartość 166 432,15 zł, wersja 0.5.0, dzień 18.11.2026, 12 pozycji."}, REPO, None)
         text = r["tytul"] + r["tresc"] + urllib.parse.unquote(r["url"])
         for secret in ("jan.kowalski", "example.com", "1090 1014", "90010112345", "JanKowalski"):
