@@ -51,19 +51,22 @@
       this._bind();
     }
     setSeries(series) { this.o.series = series; this.render(); }
-    setData(points, keepWindow) {
+    // deferRender: wolajacy zaraz ustawi okno (setWindow rysuje) - bez podwojnego rysowania
+    setData(points, keepWindow, deferRender) {
       this.data = points || [];
       if (!keepWindow || !this.win) this.win = this.data.length ? [this.data[0].t, this.data[this.data.length - 1].t] : null;
-      this.render();
+      if (!deferRender) this.render();
     }
+    // rysowanie raz na klatke ekranu (przeciaganie i kolko myszy zglaszaja wiele zdarzen na klatke; obraz ten sam)
+    requestRender() { if (!this._raf) this._raf = requestAnimationFrame(() => { this._raf = 0; this.render(); }); }
     domain() { return this.data.length ? [this.data[0].t, this.data[this.data.length - 1].t] : [0, 1]; }
     isZoomed() { const [a, b] = this.domain(); return this.win && (this.win[0] > a + DAY / 2 || this.win[1] < b - DAY / 2); }
-    setWindow(t0, t1, silent) {
+    setWindow(t0, t1, silent, lazy) {
       if (!this.data.length) return;
       const [a, b] = this.domain();
       let span = Math.max(this.o.minSpan, t1 - t0); span = Math.min(span, b - a);
       t0 = clamp(t0, a, b - span); t1 = t0 + span;
-      this.win = [t0, t1]; this.render();
+      this.win = [t0, t1]; if (lazy) this.requestRender(); else this.render();
       if (!silent && this.onWindow) this.onWindow(t0, t1);
     }
     reset() { const [a, b] = this.domain(); this.setWindow(a, b); }
@@ -79,6 +82,7 @@
       return [i0, i1];
     }
     render() {
+      if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; }
       const svg = this.svg; while (svg.firstChild) svg.removeChild(svg.firstChild);
       const lay = this._layout(); this.lay = lay; svg.setAttribute('height', lay.H); svg.setAttribute('viewBox', `0 0 ${lay.W} ${lay.H}`);
       if (!this.data.length || !this.win) { el('text', {x: lay.W / 2, y: lay.H / 2, 'text-anchor': 'middle', style: 'fill:var(--muted);font-size:13px'}, svg).textContent = 'Brak danych do wykresu'; return; }
@@ -95,7 +99,9 @@
       const pad = (hi - lo || Math.abs(hi) || 1) * 0.07; lo -= (lo === 0 && this.o.zeroBased ? 0 : pad); hi += pad;
       const {L, R, T, plotB, W} = lay, [t0, t1] = this.win;
       const x = t => L + (W - L - R) * (t - t0) / Math.max(1, t1 - t0), y = v => T + (plotB - T) * (1 - (v - lo) / (hi - lo));
-      this.x = x; this.y = y; this.xInv = px => t0 + (px - L) / (W - L - R) * (t1 - t0);
+      // xInv z BIEZACEGO okna (this.win), nie z okna z chwili rysowania: zdarzenia myszy miedzy zgloszeniem a narysowaniem klatki licza sie jak dotad
+      this.x = x; this.y = y; this.xInv = px => { const [w0, w1] = this.win; return w0 + (px - L) / (W - L - R) * (w1 - w0); };
+      this.xInvDrawn = px => t0 + (px - L) / (W - L - R) * (t1 - t0);          // podpowiedz: wg narysowanego obrazu
       const g = el('g', {}, svg);
       for (const v of yTicks(lo, hi, Math.max(3, Math.floor((plotB - T) / 55)))) {
         el('line', {x1: L, x2: W - R, y1: y(v), y2: y(v), style: 'stroke:var(--line);stroke-width:1' + (v === 0 ? ';stroke:var(--line2)' : '')}, g);
@@ -159,12 +165,23 @@
       const {L, R, W, H, navT} = this.lay, s0 = this.o.series.find(s => !this.hidden.has(s.key) && !s.dash) || this.o.series[0], [a, b] = this.domain();
       const g = el('g', {}, this.svg), h = H - navT - 2;
       el('rect', {x: L, y: navT, width: W - L - R, height: h, rx: 6, style: 'fill:var(--card2);stroke:var(--line)'}, g);
-      let lo = Infinity, hi = -Infinity; for (const p of this.data) { const v = p[s0.key]; if (v !== null && v !== undefined) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
-      if (!isFinite(lo)) return;
-      if (s0.signed) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
-      const nx = t => L + (W - L - R) * (t - a) / Math.max(1, b - a), ny = v => navT + 3 + (h - 6) * (1 - (v - lo) / ((hi - lo) || 1));
+      const nx = t => L + (W - L - R) * (t - a) / Math.max(1, b - a);
+      // linia nawigatora zalezy tylko od danych, serii i rozmiaru - przy przesuwaniu okna uzywamy zapamietanej
+      const nc = this._navCache;
+      let d;
+      if (nc && nc.data === this.data && nc.key === s0.key && nc.signed === !!s0.signed && nc.W === W && nc.navT === navT && nc.h === h && nc.L === L && nc.R === R) d = nc.d;
+      else {
+        let lo = Infinity, hi = -Infinity; for (const p of this.data) { const v = p[s0.key]; if (v !== null && v !== undefined) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+        if (!isFinite(lo)) d = null;
+        else {
+          if (s0.signed) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+          const ny = v => navT + 3 + (h - 6) * (1 - (v - lo) / ((hi - lo) || 1));
+          d = ''; this.data.forEach(p => { const v = p[s0.key]; if (v !== null && v !== undefined) d += (d ? 'L' : 'M') + nx(p.t).toFixed(1) + ',' + ny(v).toFixed(1); });
+        }
+        this._navCache = {data: this.data, key: s0.key, signed: !!s0.signed, W, navT, h, L, R, d};
+      }
+      if (d === null) return;
       this.nx = nx; this.nxInv = px => a + (px - L) / (W - L - R) * (b - a);
-      let d = ''; this.data.forEach((p, i) => { const v = p[s0.key]; if (v !== null && v !== undefined) d += (d ? 'L' : 'M') + nx(p.t).toFixed(1) + ',' + ny(v).toFixed(1); });
       el('path', {d, style: `fill:none;stroke:${s0.signed ? 'var(--muted)' : s0.color};stroke-width:1.2;opacity:.8`}, g);
       const [t0, t1] = this.win, bx = nx(t0), bw = Math.max(6, nx(t1) - nx(t0));
       el('rect', {x: L, y: navT, width: Math.max(0, bx - L), height: h, style: 'fill:var(--bg);opacity:.55'}, g);
@@ -177,7 +194,7 @@
     _pt(ev) { const r = this.svg.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
     _hover(px) {
       if (!this.visPts || !this.visPts.length) return;
-      const t = this.xInv(px), pts = this.visPts; let lo = 0, hi = pts.length - 1;
+      const t = this.xInvDrawn(px), pts = this.visPts; let lo = 0, hi = pts.length - 1;
       while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m].t < t) lo = m; else hi = m; }
       const p = Math.abs(pts[lo].t - t) < Math.abs(pts[hi].t - t) ? pts[lo] : pts[hi];
       const X = this.x(p.t); this.cross.style.display = ''; const ln = this.cross.firstChild; ln.setAttribute('x1', X); ln.setAttribute('x2', X);
@@ -210,12 +227,12 @@
           const a = clamp(Math.min(drag.x0, px), this.lay.L, this.lay.W - this.lay.R), b = clamp(Math.max(drag.x0, px), this.lay.L, this.lay.W - this.lay.R);
           this.sel.style.display = ''; this.sel.setAttribute('x', a); this.sel.setAttribute('width', b - a); this._hover(px);
         } else if (drag.kind === 'pan') {
-          const dt = (this.xInv(drag.x0) - this.xInv(px)); this.setWindow(drag.w0[0] + dt, drag.w0[1] + dt);
+          const dt = (this.xInv(drag.x0) - this.xInv(px)); this.setWindow(drag.w0[0] + dt, drag.w0[1] + dt, false, true);
         } else {
           const [a, b] = this.domain(), dt = (px - drag.x0) / (this.lay.W - this.lay.L - this.lay.R) * (b - a);
-          if (drag.mode === 'move') this.setWindow(drag.w0[0] + dt, drag.w0[1] + dt);
-          else if (drag.mode === 'l') this.setWindow(Math.min(drag.w0[0] + dt, drag.w0[1] - this.o.minSpan), drag.w0[1]);
-          else this.setWindow(drag.w0[0], Math.max(drag.w0[1] + dt, drag.w0[0] + this.o.minSpan));
+          if (drag.mode === 'move') this.setWindow(drag.w0[0] + dt, drag.w0[1] + dt, false, true);
+          else if (drag.mode === 'l') this.setWindow(Math.min(drag.w0[0] + dt, drag.w0[1] - this.o.minSpan), drag.w0[1], false, true);
+          else this.setWindow(drag.w0[0], Math.max(drag.w0[1] + dt, drag.w0[0] + this.o.minSpan), false, true);
         }
       });
       const end = ev => {
@@ -235,7 +252,7 @@
         if (px < L || px > W - R || py < T || py > plotB) return;
         ev.preventDefault();
         const c = this.xInv(px), k = ev.deltaY > 0 ? 1.25 : 0.8, [t0, t1] = this.win;
-        this.setWindow(c - (c - t0) * k, c + (t1 - c) * k);
+        this.setWindow(c - (c - t0) * k, c + (t1 - c) * k, false, true);
       }, {passive: false});
     }
     _leave() { if (this.cross) this.cross.style.display = 'none'; this.tip.style.display = 'none'; }

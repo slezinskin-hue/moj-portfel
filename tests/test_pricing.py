@@ -189,6 +189,7 @@ class TestLiveValuation(PricingBase):
         from invapp.pricing import audit
         a = audit.run(tm._conn, "BROKER:XTB", ("XTB",))
         self.assertEqual(a["checks"][0]["status"], "OK", a["checks"][0])                      # kontrola liczy wg tego samego ustawienia
+        self.assertEqual((a["positions"], a["recomputed_value"]), (2, D("858.0") + D(1010)))      # obie pozycje przeliczone (notowania pobierane zbiorczo)
         self.setting("price_source", "XTB_EXPORT")
         a = audit.run(tm._conn, "BROKER:XTB", ("XTB",))
         self.assertEqual(a["checks"][0]["status"], "OK", a["checks"][0]); self.assertIn("eksportu XTB", a["checks"][0]["kontrola"])

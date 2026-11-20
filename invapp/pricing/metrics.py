@@ -179,6 +179,7 @@ def return_series(pts, income=None, step=7):
     out = {"twr_inc": [1.0], "gain_net": [], "gain_gross": [], "xirr": [], "cagr": []}
     idx = idx_inc = 1.0
     flows, guess = [], 0.1
+    net = sum(-a for _, a in flows)               # wplaty netto do dnia: liczone na nowo tylko w dni z przeplywem (ten sam sum() po tej samej liscie, wynik co do bitu)
     for i, (d, v, f, gross) in enumerate(pts):
         if i:
             base = pts[i - 1][1] + f
@@ -187,7 +188,7 @@ def return_series(pts, income=None, step=7):
             out["twr_inc"].append(idx_inc)
         if abs(f) > 1e-9:
             flows.append((d, -f))
-        net = sum(-a for _, a in flows)
+            net = sum(-a for _, a in flows)
         g = v - net
         out["gain_net"].append(g / net if net > 1e-9 else None)
         out["gain_gross"].append(g / gross if gross > 1e-9 else None)

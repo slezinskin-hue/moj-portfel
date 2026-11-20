@@ -116,9 +116,14 @@ def _json_default(o):
     raise TypeError(type(o))
 
 
-def _jsonable(obj):
-    import json
-    return json.loads(json.dumps(obj, default=_json_default))
+class _JSON(JSONResponse):
+    """Odpowiedz JSON z danymi aplikacji (Decimal, daty): jedna serializacja zamiast trzech (dawniej json.dumps -> json.loads -> JSONResponse).
+    Wynik co do bajtu taki sam jak JSONResponse(json.loads(json.dumps(obj, default=_json_default))): te same zamiany (Decimal -> float,
+    data -> ISO) i te same opcje zapisu co JSONResponse."""
+
+    def render(self, content):
+        import json
+        return json.dumps(content, default=_json_default, ensure_ascii=False, allow_nan=False, indent=None, separators=(",", ":")).encode("utf-8")
 
 
 def _same_origin(request):
@@ -148,10 +153,10 @@ async def api_import(request: Request):
     preview.invalidate_caches()
     importing.start_background_pricing()
     c = rep["counters"]
-    return JSONResponse(_jsonable({"plik": rep["file"], "wiersze": c["read"], "nowe": c["INSERTED"], "duplikaty": c["DUPLICATE"], "konflikty": c["CONFLICT"],
+    return _JSON({"plik": rep["file"], "wiersze": c["read"], "nowe": c["INSERTED"], "duplikaty": c["DUPLICATE"], "konflikty": c["CONFLICT"],
                                    "niezmapowane": c["UNMAPPED"], "zignorowane": c["IGNORED"], "nowe_konta": rep["created_accounts"],
                                    "ostrzezenia": rep["warnings"][:8], "kontrole": [{"kontrola": k["kontrola"], "status": k["status"]} for k in rep["checks"]],
-                                   "informacje": rep.get("info", [])[:6], "pary_przelewow": rep.get("transfer_pairs", {})}))
+                                   "informacje": rep.get("info", [])[:6], "pary_przelewow": rep.get("transfer_pairs", {})})
 
 
 @app.post("/api/import/{batch_id}/usun")
@@ -167,7 +172,7 @@ async def api_import_remove(batch_id: int, request: Request):
         return JSONResponse({"blad": f"Nie udało się usunąć pliku ({type(e).__name__}); nic nie zostało zmienione."}, status_code=500)
     preview.invalidate_caches()
     importing.start_background_pricing()
-    return JSONResponse(_jsonable(res))
+    return _JSON(res)
 
 
 @app.post("/api/konto/{account_id}/usun")
@@ -183,7 +188,7 @@ async def api_account_remove(account_id: int, request: Request):
         return JSONResponse({"blad": f"Nie udało się usunąć portfela ({type(e).__name__}); nic nie zostało zmienione."}, status_code=500)
     preview.invalidate_caches()
     importing.start_background_pricing()
-    return JSONResponse(_jsonable(res))
+    return _JSON(res)
 
 
 @app.post("/api/usun-wszystko")
@@ -198,7 +203,7 @@ async def api_remove_everything(request: Request):
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": f"Nie udało się usunąć ({type(e).__name__}); nic nie zostało zmienione."}, status_code=500)
     preview.invalidate_caches()
-    return JSONResponse(_jsonable(res))
+    return _JSON(res)
 
 
 @app.get("/api/import/status")
@@ -212,7 +217,7 @@ def api_counterparties():
     try:
         conn = importing.owner_conn()
         try:
-            return JSONResponse(_jsonable({"kontrahenci": importing.pending_counterparties(conn)}))
+            return _JSON({"kontrahenci": importing.pending_counterparties(conn)})
         finally:
             conn.close()
     except Exception as e:  # noqa: BLE001
@@ -248,7 +253,7 @@ def api_live(force: bool = False, scope: str = "all", fast: bool = False):
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
     if data.get("scope") and (data["scope"].get("snapshot_positions") or data["scope"].get("missing_positions")):        # pozycje bez ceny rynkowej: sprobuj uzupelnic w tle (z ograniczeniem czestosci)
         importing.retry_missing_prices()
-    return JSONResponse(_jsonable({"odswiezenie": refresh, **data}))
+    return _JSON({"odswiezenie": refresh, **data})
 
 
 @app.get("/api/historia")
@@ -258,7 +263,7 @@ def api_history(scope: str = "all"):
         s = preview.history_data(scope)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
-    return JSONResponse(_jsonable(s))
+    return _JSON(s)
 
 @app.get("/api/wskazniki")
 def api_metrics(scope: str = "all"):
@@ -267,13 +272,13 @@ def api_metrics(scope: str = "all"):
         data = preview.metrics_data(scope)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
-    return JSONResponse(_jsonable(data))
+    return _JSON(data)
 
 @app.get("/api/dochody")
 def api_income(scope: str = "all"):
     """Dochody dodatkowe miesiecznie (dywidendy, odsetki, nagrody, oplaty) do wykresu. Tylko odczyt."""
     try:
-        return JSONResponse(_jsonable(preview.income_monthly(scope)))
+        return _JSON(preview.income_monthly(scope))
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
 
@@ -282,7 +287,7 @@ def api_income(scope: str = "all"):
 def api_closed(scope: str = "all"):
     """Zamkniete pozycje: sprzedaze z zyskiem zrealizowanym, pogrupowane po instrumencie. Tylko odczyt."""
     try:
-        return JSONResponse(_jsonable(preview.closed_data(scope)))
+        return _JSON(preview.closed_data(scope))
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
 
@@ -291,7 +296,7 @@ def api_closed(scope: str = "all"):
 def api_position(listing: int, scope: str = "all"):
     """Wykres pozycji: ceny dzienne i transakcje kupna/sprzedazy. Tylko odczyt."""
     try:
-        return JSONResponse(_jsonable(preview.position_data(scope, listing)))
+        return _JSON(preview.position_data(scope, listing))
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
 
@@ -303,7 +308,7 @@ def api_audit(scope: str = "all"):
         data = preview.audit_data(scope)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
-    return JSONResponse(_jsonable(data))
+    return _JSON(data)
 
 
 @app.get("/api/pytania")
@@ -312,7 +317,7 @@ def api_questions():
     try:
         conn = importing.owner_conn()
         try:
-            return JSONResponse(_jsonable({"pytania": importing.pending_questions(conn)}))
+            return _JSON({"pytania": importing.pending_questions(conn)})
         finally:
             conn.close()
     except Exception as e:  # noqa: BLE001
@@ -339,7 +344,7 @@ async def api_answer(broker_key: str, question_id: str, request: Request):
         conn.close()
     preview.invalidate_caches()
     importing.start_background_pricing()
-    return JSONResponse(_jsonable(res))
+    return _JSON(res)
 
 
 @app.post("/api/zamknij")
@@ -412,7 +417,7 @@ def api_export_xlsx(scope: str = "all"):
 @app.get("/api/ekspozycja")
 def api_exposure(scope: str = "all"):
     try:
-        return JSONResponse(_jsonable(preview.exposure_data(scope)))
+        return _JSON(preview.exposure_data(scope))
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
 
@@ -421,7 +426,7 @@ def api_exposure(scope: str = "all"):
 def api_cash():
     """Zakladka Gotowka: konta bankowe (wpisane recznie), wolne srodki XTB (z ksiegi), lokaty, ustawienia."""
     try:
-        return JSONResponse(_jsonable(preview.cash_data()))
+        return _JSON(preview.cash_data())
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
 
@@ -451,7 +456,7 @@ async def owner_write(request, fn):
     finally:
         conn.close()
     preview.invalidate_caches()
-    return JSONResponse(_jsonable(res if res is not None else {"zapisano": True}))
+    return _JSON(res if res is not None else {"zapisano": True})
 
 
 @app.post("/api/gotowka/konto")
@@ -476,7 +481,7 @@ async def api_cash_archive(aid: int, request: Request):
 def api_ppk():
     """Zakladka PPK: rachunki z biezacym stanem, kategoriami skladek, historia stanow i ostrzezeniami (core/ppk.py)."""
     try:
-        return JSONResponse(_jsonable(preview.ppk_data()))
+        return _JSON(preview.ppk_data())
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"blad": type(e).__name__}, status_code=503)
 
@@ -515,7 +520,7 @@ async def api_ppk_parse(request: Request):
     from invapp.core import ppk
     conn = preview._connect(readonly=True)
     try:
-        return JSONResponse(_jsonable(ppk.parse_text(conn.cursor(), text)))
+        return _JSON(ppk.parse_text(conn.cursor(), text))
     finally:
         conn.close()
 
@@ -571,11 +576,30 @@ async def api_rebuild(request: Request):
     return JSONResponse({"przeliczono": res})
 
 
+@app.post("/api/zglos")
+async def api_report(request: Request):
+    """Zgloszenie bledu (invapp/zgloszenia.py): przygotowuje tresc i adres zgloszenia na GitHubie z tego, co wpisal uzytkownik.
+    Niczego nie wysyla i niczego nie zapisuje - zgloszenie otwiera i zatwierdza uzytkownik w przegladarce."""
+    from invapp import updates, zgloszenia
+    if not _same_origin(request):
+        return JSONResponse({"blad": "niedozwolone zadanie"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    tech = None
+    if body.get("techniczne"):
+        tech = {"tryb": "okno" if getattr(request.app.state, "window", None) is not None else "przegladarka", "widok": body.get("widok")}
+    res = zgloszenia.build(body, updates.build_info().get("repo") or "", tech)
+    return _JSON(res, status_code=422 if res["bledy"] else 200)
+
+
 @app.get("/api/aktualizacja")
 def api_update_check(force: bool = False):
     """Czy jest nowsza wersja na GitHubie (Releases repozytorium)? Tylko odczyt; brak internetu = brak informacji."""
     from invapp import updates
-    return JSONResponse(_jsonable(updates.check(force=force)))
+    return _JSON(updates.check(force=force))
 
 
 @app.post("/api/aktualizacja/instaluj")

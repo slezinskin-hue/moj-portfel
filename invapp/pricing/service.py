@@ -92,7 +92,7 @@ def refresh_quotes(conn, provider, pause=0.3):
                      and exists (select 1 from derived_lots dl where dl.listing_id = m.listing_id and dl.qty_remaining > 0)
                    order by m.provider_symbol""", (provider.code,))
     rows = cur.fetchall()
-    res = {"quotes_new": 0, "quotes_same": 0, "errors": [], "fx": {}}
+    res = {"quotes_new": 0, "quotes_same": 0, "errors": [], "fx": {}, "fx_new": 0}
     fetched = fetch_all(provider.quote, [sym for _, sym in rows])
     currencies = set()
     for listing_id, sym in rows:
@@ -112,6 +112,7 @@ def refresh_quotes(conn, provider, pause=0.3):
             res["errors"].append(f"{ccy}PLN: {type(err).__name__}"); continue
         cur.execute("""insert into fx_quotes(base,quote,rate,provider,quoted_at) values (%s,'PLN',%s,%s,%s) on conflict do nothing""",
                     (ccy, f["rate"], provider.code, f["quoted_at"]))
+        res["fx_new"] += cur.rowcount                          # nowy kurs (0 = taki sam juz zapisany)
         res["fx"][ccy] = str(f["rate"])
     return res
 

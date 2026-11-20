@@ -64,28 +64,47 @@ def run(conn, scope_code, brokers=("XTB", "TR")):
                    from derived_lots dl where dl.account_id = any(%s) group by dl.listing_id having sum(dl.qty_remaining) > 0.00000001""", (accounts,))
     positions = cur.fetchall()
     expected_total, bad, missing, from_broker = D(0), [], [], 0
+    # Wydajnosc: dane wszystkich pozycji kilkoma zapytaniami zbiorczymi (dawniej 3-4 zapytania na pozycje) - te same tabele bazowe i te same reguly:
+    # najnowsze notowanie ze zweryfikowanego powiazania (lateral ... limit 1 = to samo zapytanie co dla jednej pozycji), wartosc pokazana z widoku wyceny,
+    # ilosci kont, stan z ostatniego raportu XTB; kurs waluty raz na walute.
+    ids = [r[0] for r in positions]
+    cur.execute("""select x.listing_id, q.price, q.currency, q.price_unit from unnest(%s::bigint[]) x(listing_id)
+                   cross join lateral (select q.price, q.currency, q.price_unit from market_quotes q join listing_provider_symbols m
+                                         on m.listing_id = q.listing_id and m.provider = q.provider and m.status = 'VERIFIED'
+                                       where q.listing_id = x.listing_id order by q.quoted_at desc limit 1) q""", (ids,))
+    quotes = {r[0]: r[1:] for r in cur.fetchall()}
+    cur.execute("""select listing_id, coalesce(sum(value_used), 0), bool_or(value_source = 'LIVE') from v_live_position_values
+                   where listing_id = any(%s) and account_id = any(%s) group by listing_id""", (ids, accounts))
+    shown_by = {r[0]: r[1:] for r in cur.fetchall()}
+    cur.execute("""select listing_id, account_id, sum(qty_remaining) from derived_lots where listing_id = any(%s) and account_id = any(%s)
+                   group by 1, 2 having sum(qty_remaining) > 0""", (ids, accounts))
+    acc_qty = {}
+    for lid, acc, aqty in cur.fetchall():
+        acc_qty.setdefault(lid, []).append((acc, aqty))
+    snaps = {}
+    if st["price_source"] == "XTB_EXPORT":
+        cur.execute("""select s.account_id, s.listing_id, s.value_cash, s.volume from broker_position_snapshots s
+                       where s.account_id = any(%s) and s.listing_id = any(%s) and s.row_level = 'INSTRUMENT'
+                         and s.as_of = (select max(as_of) from broker_position_snapshots where account_id = s.account_id and row_level = 'INSTRUMENT')""", (accounts, ids))
+        for acc, lid, val, vol in cur.fetchall():
+            snaps.setdefault((acc, lid), (val, vol))
+    fx_memo = {}
     for listing_id, qty, ticker in positions:
-        cur.execute("""select q.price, q.currency, q.price_unit from market_quotes q join listing_provider_symbols m
-                         on m.listing_id = q.listing_id and m.provider = q.provider and m.status = 'VERIFIED'
-                       where q.listing_id = %s order by q.quoted_at desc limit 1""", (listing_id,))
-        qt = cur.fetchone()
-        cur.execute("select coalesce(sum(value_used), 0), bool_or(value_source = 'LIVE') from v_live_position_values where listing_id = %s and account_id = any(%s)", (listing_id, accounts))
-        shown, is_live = cur.fetchone()
+        qt = quotes.get(listing_id)
+        shown, is_live = shown_by.get(listing_id, (D(0), None))
         exp, unresolved = D(0), False
-        cur.execute("select account_id, sum(qty_remaining) from derived_lots where listing_id = %s and account_id = any(%s) group by 1 having sum(qty_remaining) > 0", (listing_id, accounts))
-        for acc, aqty in cur.fetchall():
+        for acc, aqty in acc_qty.get(listing_id, []):
             if st["price_source"] == "XTB_EXPORT":
-                cur.execute("""select s.value_cash, s.volume from broker_position_snapshots s
-                               where s.account_id = %s and s.listing_id = %s and s.row_level = 'INSTRUMENT'
-                                 and s.as_of = (select max(as_of) from broker_position_snapshots where account_id = %s and row_level = 'INSTRUMENT')""", (acc, listing_id, acc))
-                sn = cur.fetchone()
+                sn = snaps.get((acc, listing_id))
                 if sn and sn[1] is not None and abs(_dec(sn[1]) - _dec(aqty)) <= D("0.00000001"):
                     exp += _dec(sn[0]); from_broker += 1; continue
             if not qt:
                 unresolved = True; continue
             price, ccy, unit = qt
             price = _dec(price) / (100 if unit == "MINOR_1_100" else 1)
-            fx = D(1) if ccy == "PLN" else _fx(cur, ccy, st["fx_source"])
+            if ccy != "PLN" and ccy not in fx_memo:
+                fx_memo[ccy] = _fx(cur, ccy, st["fx_source"])
+            fx = D(1) if ccy == "PLN" else fx_memo[ccy]
             if fx is None:
                 unresolved = True; continue
             exp += _dec(aqty) * price * fx
@@ -108,7 +127,6 @@ def run(conn, scope_code, brokers=("XTB", "TR")):
     cur.execute("""select coalesce(sum(c.proceeds_cash), 0), coalesce(sum(c.cost_cash), 0), coalesce(sum(c.realized_pnl), 0)
                    from derived_lot_closures c join derived_lots dl using (lot_id) where dl.account_id = any(%s)""", (accounts,))
     sales, cost_sold, realized = (_dec(x) for x in cur.fetchone())
-    cur.execute("""select coalesce(sum(cost_cash_initial), 0) from derived_lots dl where dl.account_id = any(%s) and dl.qty_remaining > 0.00000001""", (accounts,))
     gain = shown_total - (purchases - sales)
     add("Zysk z inwestycji = wartość papierów − (zakupy − sprzedaże)", abs(gain - _dec(s["investment_gain"])) <= TOL,
         f"{gain.quantize(TOL)} vs {_dec(s['investment_gain']).quantize(TOL)} (zakupy {purchases.quantize(TOL)}, sprzedaże {sales.quantize(TOL)})")

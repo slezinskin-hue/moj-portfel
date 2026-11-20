@@ -297,7 +297,7 @@
       main.onWindow = (a, b) => { $('#zoom-reset').style.display = main.isZoomed() ? 'inline' : 'none'; $$('#range button').forEach(x => x.classList.remove('on')); };
     }
     main.o.series = MODES[S.mode].series(); main.o.fmtY = MODES[S.mode].fmt; main.o.includeZero = S.mode === 'twr';
-    const pts = mainPoints(); main.setData(pts, true); renderLegend(); renderPctTools();
+    const pts = mainPoints(); main.setData(pts, true, pts.length > 0); renderLegend(); renderPctTools();      // rysuje applyRange (raz, nie dwa razy)
     applyRange(S.range, true);
     renderIdxNote();
     const h = S.hist, last = pts[pts.length - 1];
@@ -725,6 +725,39 @@
     $('#set-modal').style.display = '';
   };
   $('#set-close').onclick = () => { $('#set-modal').style.display = 'none'; };
+
+  // ---------------------------------------------------------------- zgloszenie bledu (invapp/zgloszenia.py): aplikacja niczego nie wysyla sama -
+  // serwer buduje tresc (z maskowaniem danych osobowych) i adres zgloszenia na GitHubie, uzytkownik je oglada i otwiera w przegladarce
+  const bugModal = $('#bug-modal');
+  const bugShow = ready => { $('#bug-form').hidden = ready; $('#bug-ready').hidden = !ready; };
+  const openBug = () => { bugShow(false); bugModal.style.display = ''; setTimeout(() => $('#bug-form [name=tytul]').focus(), 30); return false; };
+  const closeBug = () => { bugModal.style.display = 'none'; };
+  $('#bug-btn').onclick = openBug;
+  $('#bug-link').onclick = e => { e.preventDefault(); openBug(); };
+  $('#bug-cancel').onclick = closeBug;
+  $('#bug-back').onclick = () => bugShow(false);
+  bugModal.addEventListener('click', e => { if (e.target === bugModal) closeBug(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && bugModal.style.display === '') closeBug(); });
+  $('#bug-form').onsubmit = async e => {
+    e.preventDefault();
+    const f = e.target, body = Object.fromEntries(['tytul', 'opis', 'kroki', 'oczekiwane'].map(k => [k, f[k].value]));
+    body.techniczne = f.techniczne.checked; body.widok = viewOf();
+    let d;
+    try { d = await post('/api/zglos', body); } catch (err) { toast(err.message); return; }
+    $('#bug-preview').textContent = d.tytul + '\n\n' + d.tresc;
+    const m = $('#bug-mask'); m.hidden = !d.zamaskowano.length && !d.skrocono;
+    m.textContent = (d.zamaskowano.length ? 'Zamaskowano: ' + d.zamaskowano.join(', ') + '. ' : '') + (d.skrocono ? 'Opis był za długi i został skrócony.' : '');
+    const a = $('#bug-open');
+    if (d.url) { a.href = d.url; a.removeAttribute('aria-disabled'); } else { a.href = '#'; a.setAttribute('aria-disabled', 'true'); }
+    $('#bug-norepo').hidden = !!d.url;
+    S.bugText = d.tytul + '\n\n' + d.tresc;
+    bugShow(true);
+  };
+  $('#bug-open').addEventListener('click', () => { if ($('#bug-open').href.startsWith('https://github.com/')) setTimeout(() => { closeBug(); $('#bug-form').reset(); toast('Zgłoszenie otwarte w przeglądarce – zatwierdź je tam. Dziękuję!'); }, 300); });
+  $('#bug-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(S.bugText || ''); toast('Skopiowano treść zgłoszenia.'); }
+    catch (e) { const r = document.createRange(); r.selectNodeContents($('#bug-preview')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Zaznaczono treść – skopiuj ją Ctrl+C.'); }
+  };
   $('#set-modal').addEventListener('click', e => { if (e.target.id === 'set-modal') $('#set-modal').style.display = 'none'; });
   $('#cash-add').onsubmit = async e => {
     e.preventDefault(); const f = e.target, b = f.querySelector('button'); b.disabled = true;
@@ -940,8 +973,11 @@
         st.className = 'status' + (s.state === 'error' ? ' err' : ''); st.querySelector('span:last-child').textContent = s.state === 'error' ? 'Ceny nie zostały pobrane' : 'Dane aktualne';
         $('#bg-progress').style.display = 'none';
       }
-      if (S.version !== null && s.version !== S.version) { loadLive({fast: true}); loadHistory(); loadAudit(); loadClosed(); S.pcharts = {}; if (s.state !== 'running') loadQuestions(); }
-      S.version = s.version;
+      const changed = S.version !== null && s.version !== S.version;
+      if (changed) { loadLive({fast: true}); loadHistory(); loadAudit(); loadClosed(); S.pcharts = {}; }
+      // pytania brokerow po zakonczeniu zadania w tle (takze gdy ostatnie kroki nie zmienily cen i wersja zostala ta sama)
+      if (s.state !== 'running' && (changed || S.jobState === 'running')) loadQuestions();
+      S.version = s.version; S.jobState = s.state;
       setTimeout(pollStatus, s.state === 'running' ? 2000 : 15000);
     } catch (e) { setTimeout(pollStatus, 5000); }
   }

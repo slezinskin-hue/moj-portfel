@@ -12,6 +12,7 @@ Wczytujesz eksporty od brokera, a aplikacja liczy:
   do wliczenia w wartość portfela na życzenie), **PPK** (stany rachunku przepisane ze strony instytucji: wartość, wpłaty Twoje / pracodawcy / państwa,
   zmiana wartości i wykres) i **Symulacje** (projekcja z celem, „co gdybym inwestował w indeks”),
 * **eksport** do Excela i PDF, wybór **źródła cen** (Yahoo na żywo albo wartości z ostatniego eksportu XTB) i **kursów** (rynkowe albo NBP),
+* **zgłaszanie błędów** przyciskiem 🐞 – gotowe zgłoszenie na GitHubie (bez danych portfela; dane osobowe w opisie maskowane),
 * i **sprawdza poprawność liczb** (niezależne przeliczenie i tożsamości księgowe); przy każdej uwadze podaje prawdopodobną przyczynę i przycisk
   rozwiązania (np. „Zdecyduj za mnie” przy podziale akcji niewidocznym w eksporcie) – bez ręcznego dopisywania kwot.
 
@@ -27,7 +28,8 @@ Pobierz `MojPortfel-Setup-X.Y.Z.exe` z **Releases** tego repozytorium na GitHubi
 
 * Dane (operacje, salda, baza) zostają w `%LOCALAPPDATA%\AplikacjaInwestycyjna` na Twoim komputerze. Do internetu trafiają tylko symbole
   instrumentów (ceny, sektory i indeksy z Yahoo Finance), zapytania o kursy NBP, specyfikacja instrumentów XTB i pytanie o nową wersję aplikacji (GitHub).
-  Aplikacja nie ma kont, logowania, telemetrii ani wysyłania raportów.
+  Aplikacja nie ma kont, logowania, telemetrii ani wysyłania raportów. Zgłoszenie błędu (🐞) aplikacja tylko przygotowuje – otwierasz je
+  i zatwierdzasz sam w przeglądarce na GitHubie (zgłoszenie jest publiczne; zawiera tylko to, co wpiszesz, bez danych portfela).
 * Z eksportów nie są zapisywane dane osobowe (IBAN, imiona i nazwiska z opisów przelewów) – tylko skrót i maska. Konta bankowe w zakładce
   „Gotówka” mają tylko nazwę i saldo (bez numerów). PPK: zapisywane są tylko kwoty, daty, nazwa instytucji i funduszu – bez numeru rejestru
   i nazwy pracodawcy; tekst wklejony ze strony instytucji służy tylko do uzupełnienia pól i nie jest zapisywany.

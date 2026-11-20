@@ -145,6 +145,7 @@ def stop():
         pgdata = _state["server"]
         mine = _state["started_here"] or _state["stop_on_exit"]
         _state.update(server=None, host=None, port=None, secrets=None, started_here=False, stop_on_exit=False)
+    drain_pool()                                        # wolne polaczenia z puli nie blokuja zatrzymania serwera
     if mine:
         try:
             _run([bin_path("pg_ctl"), "stop", "-D", str(pgdata), "-m", "fast", "-w", "-t", "60"], timeout=90, check=False)
@@ -243,14 +244,92 @@ def start(stop_on_exit=False):
 
 
 def connect(role="app", readonly=False):
-    """Polaczenie z baza aplikacji: role 'app' (odczyt + dopisywanie notowan) albo 'owner' (zapis ksiegi)."""
+    """Polaczenie z baza aplikacji: role 'app' (odczyt + dopisywanie notowan) albo 'owner' (zapis ksiegi).
+    Polaczenia 'app' tylko do odczytu pochodza z puli (close() oddaje je do puli) - nowe polaczenie kosztuje ok. 40 ms (proces serwera,
+    uwierzytelnienie scram) plus ok. 20 ms "zimnego" pierwszego zapytania. Zapis (owner, app bez readonly) - zawsze nowe polaczenie."""
     if _state["server"] is None:
         start()
     user = APP if role == "app" else OWNER
-    conn = psycopg2.connect(host=_state["host"], port=_state["port"], dbname=DB_NAME, user=user, password=_state["secrets"][user], connect_timeout=10)
+    key = (_state["host"], _state["port"], user)
+    if readonly and role == "app":
+        conn = _from_pool(key)
+        if conn is not None:
+            return conn
+    conn = psycopg2.connect(host=_state["host"], port=_state["port"], dbname=DB_NAME, user=user, password=_state["secrets"][user], connect_timeout=10,
+                            connection_factory=_PooledConnection if (readonly and role == "app") else None)
     if readonly:
         conn.set_session(readonly=True, autocommit=True)
+        if role == "app":
+            conn._pool_key = key
     return conn
+
+
+# ---------------------------------------------------------------- pula polaczen tylko do odczytu (rola app)
+POOL_MAX = 8                            # wolnych polaczen w puli; nadmiarowe sa zamykane
+_pool = {"key": None, "idle": []}
+_pool_lock = threading.Lock()
+
+
+class _PooledConnection(psycopg2.extensions.connection):
+    """Polaczenie tylko do odczytu (autocommit - bez otwartej transakcji miedzy uzyciami): close() oddaje je do puli, jesli jest zdrowe."""
+    _pool_key = None                    # (host, port, uzytkownik) gdy wydane; None gdy wolne w puli albo poza pula
+
+    def close(self):
+        if not _give_back(self):
+            super().close()
+
+    def close_for_real(self):
+        super().close()
+
+
+def _give_back(conn):
+    key = conn._pool_key
+    if key is None or conn.closed:      # None: juz oddane (drugie close() nie dodaje go drugi raz) albo spoza puli
+        return False
+    try:
+        if conn.info.transaction_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+            return False
+    except psycopg2.Error:
+        return False
+    with _pool_lock:
+        current = (_state["host"], _state["port"], key[2])
+        if key != current or _pool["key"] not in (None, key) or len(_pool["idle"]) >= POOL_MAX or _state["server"] is None:
+            return False                # polaczenie z poprzedniego serwera (stop/start) - nie trafia do puli nowego
+        conn._pool_key = None
+        _pool["key"] = key
+        _pool["idle"].append((conn, key))
+        return True
+
+
+def _from_pool(key):
+    """Wolne polaczenie z puli (sprawdzone prostym zapytaniem) albo None."""
+    while True:
+        with _pool_lock:
+            if _pool["key"] != key or not _pool["idle"]:
+                return None
+            conn, ckey = _pool["idle"].pop()
+        try:
+            if not conn.closed and ckey == key:
+                cur = conn.cursor(); cur.execute("select 1"); cur.fetchone(); cur.close()
+                conn._pool_key = key
+                return conn
+        except psycopg2.Error:
+            pass
+        try:
+            conn.close_for_real()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def drain_pool():
+    """Zamyka wolne polaczenia z puli (zatrzymanie serwera); polaczenia w uzyciu zostana zamkniete przy close()."""
+    with _pool_lock:
+        idle, _pool["idle"], _pool["key"] = _pool["idle"], [], None
+    for c, _ in idle:
+        try:
+            c.close_for_real()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def server_info():

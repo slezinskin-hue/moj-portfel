@@ -160,6 +160,48 @@ Pomiar 2026-11-13 (prawdziwe dane, ~1200 operacji, 3 lata historii): strony i AP
   zamknięcie serwera czeka najwyżej 10 s na otwarte połączenia przeglądarki.
 * Strona: dane wczytywane równolegle, najpierw zapisane ceny, potem świeże; po zakończeniu kroku w tle strona odświeża dane bez przeładowania.
 
+### Optymalizacje 2026-11-20 (wyniki identyczne co do bajtu)
+
+Zasada: **żadna z nich nie zmienia sposobu liczenia**. Dowód: 624 wyniki (wszystkie funkcje strony, odpowiedzi HTTP i komórki eksportu
+Excela, 3 zakresy × 6 wariantów ustawień: obecne, EUR, PPK wł./wył., ceny z eksportu XTB, kursy NBP, wszystkie dodatki wł.) porównane
+przed i po zmianach – 0 różnic; testy `tests/test_wydajnosc.py` + mutacje „wydajnosc:” w `mutation_check_import.py`.
+
+* **Pula połączeń** (`engine.connect("app", readonly=True)`): nowe połączenie kosztowało ~40 ms (proces serwera + scram) i ~20 ms „zimnego”
+  pierwszego zapytania. Teraz `close()` oddaje połączenie do puli (maks. 8 wolnych); przy pobraniu sprawdzane `select 1`, zepsute,
+  nie-bezczynne i z poprzedniego serwera nie wracają, drugie `close()` nie dodaje go drugi raz, `engine.stop()` opróżnia pulę. Połączenia do zapisu (owner, app bez readonly) – zawsze nowe.
+* **Blokady** (`web/dashboard.py`): pobieranie notowań z Yahoo (`_live_lock`) nie blokuje już wykresu (dawniej wspólna blokada – przy wolnym
+  Yahoo wykres czekał ~28 s); jedna seria liczona naraz (`_build_lock`) – równoległe `/api/historia` i `/api/wskazniki` nie liczą jej dwa razy;
+  wynik liczony w trakcie unieważnienia nie jest zapamiętywany (`gen`), a unieważnienie w trakcie pobierania notowań nie jest nadpisywane
+  czasem pobrania (`live_gen`).
+* **Surowa seria zakresu** (`_raw_series`, klucz: zakres + dzień, pamięć jak historia: 120 s, czyszczona przy każdym zapisie i kroku w tle).
+  Portfel WSZYSTKIE: suma i składniki brokerów zawsze z **jednego liczenia** (`_raw_together` – jak dawniej, więc składniki zawsze sumują się
+  do wartości); zakładka brokera używa serii z tego kompletu (dawniej `build_series` 3× na jedno otwarcie i jeszcze raz w zakładce).
+  Zwracana tylko do odczytu, `history_data` pracuje na kopii dni.
+* **`build_series`**: dziennie tylko posiadane pozycje, ilości przeliczane w dni zmian; kolejność sumowania bez zmian (~30% szybciej).
+* **JSON** (`app._JSON`): jedna serializacja zamiast trzech; te same opcje co `JSONResponse`.
+* **Kontrola liczb**: dane pozycji kilkoma zapytaniami zbiorczymi (dawniej 3–4 na pozycję, ~95 zapytań), kurs raz na walutę; usunięte zapytanie, którego wynik nie był używany.
+* **Wskaźniki**: `live_data(summary_only=True)` – samo podsumowanie (bez listy pozycji); wykres „Zwrot %” liczy sumę wpłat tylko w dni z przepływem
+  (ten sam `sum()` – Python 3.12 sumuje z kompensacją, więc suma narastająca dawałaby inny ostatni bit).
+* **Model PPK** z pamięci podręcznej kluczowanej skrótem treści (rachunki, migawki, linie) i dniem; zwracana kopia.
+* **Zadanie w tle**: krok, który jawnie nic nie zmienił (notowania bez nowej ceny i kursu, NBP bez nowej tabeli, kursy waluty prezentacji przy PLN),
+  nie przeładowuje strony; sektory (tylko Ekspozycja, czytana przy wejściu) – bez przeładowania; po kroku brokera następny krok przeładowuje zawsze.
+  Krok notowań działa pod blokadą odświeżania ze strony – przy starcie te same ceny nie są pobierane dwa razy. Pytania brokerów strona
+  odczytuje po zakończeniu zadania niezależnie od wersji.
+* **Wykres w przeglądarce** (`charts.js`): przy przeciąganiu, kółku i zmianie rozmiaru rysowanie raz na klatkę (`requestRender`); okno liczone
+  z bieżącego stanu, podpowiedź – z narysowanego obrazu; linia nawigatora zapamiętana (zależy tylko od danych, serii i rozmiaru);
+  `buildMain` rysuje raz (dawniej `setData` + `applyRange` = dwa razy).
+
+## Zgłaszanie błędów (`invapp/zgloszenia.py`, `POST /api/zglos`)
+
+Przycisk 🐞 w nagłówku (i „Zgłoś błąd” w stopce): użytkownik wpisuje tytuł, opis, kroki i oczekiwany wynik, aplikacja pokazuje dokładną treść
+zgłoszenia i link do gotowego zgłoszenia (issue) na GitHubie – właściciel repozytorium dostaje powiadomienie GitHuba (domyślnie obserwuje swoje repozytorium).
+* Aplikacja **niczego nie wysyła sama** i nie ma klucza GitHuba: buduje tylko adres `https://github.com/{repo}/issues/new?title=…&body=…&labels=bug`,
+  który użytkownik otwiera w przeglądarce (okno aplikacji otwiera linki `target=_blank` w przeglądarce systemowej) i zatwierdza na swoim koncie GitHub.
+* Treść = tylko to, co wpisał użytkownik, i opcjonalnie wersja, system, tryb okna, zakładka – bez danych portfela. Maskowane automatycznie:
+  e-maile, numery z 11+ cyfr (rachunek, IBAN, PESEL), ścieżki `C:\Users\<nazwa>`; adres skracany do limitu GitHuba (~7 KB).
+* Repozytorium jak dla aktualizacji (`updates.build_info`); bez repozytorium (wersja ze źródeł) – tylko „Kopiuj treść”.
+* Testy: `tests/test_zgloszenia.py`, mutacje „zgloszenie:”.
+
 ## Baza danych
 
 PostgreSQL 16 **wbudowany** w program (binarki z pakietu `pgserver`, ok. 40 MB). Serwer startuje i zatrzymuje się z programem, słucha tylko

@@ -249,15 +249,21 @@ def build_series(conn, scope_code="BROKER:XTB", end=None):
     qty = defaultdict(Decimal); series = []; gross = Decimal(0); sold = Decimal(0)
     first = min(min((r[1] for r in lots), default=date.max), min((r[1] for r in closures), default=date.max), min(dep_daily, default=date.max))
     estimated_days = 0; no_history = sorted({l for l in listings if not px.get(l)})
+    # Wydajnosc: kazdego dnia przechodzimy tylko po pozycjach posiadanych (ilosc > 0), a ilosci przeliczamy tylko w dni, w ktorych sie zmieniaja.
+    # Kolejnosc sumowania wartosci jest ta sama co w petli po wszystkich notowaniach (order), wiec wynik jest identyczny co do bitu.
+    order = list(listings)
+    change_days = {dd for lst in order for dd in dqty[lst]}
+    EPS, ZERO, CENT = Decimal("0.00000001"), Decimal(0), Decimal("0.01")
+    held_now = []
     d = first
     while d <= end:
-        for lst in listings:
-            qty[lst] += dqty[lst].get(d, Decimal(0))
-        gross += buys.get(d, Decimal(0)); sold += sells.get(d, Decimal(0))
-        value = Decimal(0); est = 0; held = 0
-        for lst in listings:
-            if qty[lst] <= Decimal("0.00000001"):
-                continue
+        if d in change_days:
+            for lst in order:
+                qty[lst] += dqty[lst].get(d, ZERO)
+            held_now = [l for l in order if qty[l] > EPS]
+        gross += buys.get(d, ZERO); sold += sells.get(d, ZERO)
+        value = ZERO; est = 0; held = 0
+        for lst in held_now:
             held += 1
             rows = px.get(lst, [])
             while ptr[lst] < len(rows) and rows[ptr[lst]][0] <= d:
@@ -278,16 +284,16 @@ def build_series(conn, scope_code="BROKER:XTB", end=None):
                 fb = fallback[lst]
                 while fptr[lst] < len(fb) and fb[fptr[lst]][0] <= d:
                     fptr[lst] += 1
-                price_pln = fb[fptr[lst] - 1][2] if fptr[lst] > 0 else Decimal(0)
+                price_pln = fb[fptr[lst] - 1][2] if fptr[lst] > 0 else ZERO
                 est += 1
             value += qty[lst] * price_pln
         estimated_days += 1 if est else 0
         securities = value
-        deposit = dep_daily.get(d, Decimal(0))
+        deposit = dep_daily.get(d, ZERO)
         value = securities + deposit
-        series.append({"date": d.isoformat(), "value": value.quantize(Decimal("0.01")), "securities": securities.quantize(Decimal("0.01")),
-                       "deposits": deposit.quantize(Decimal("0.01")), "invested_gross": gross.quantize(Decimal("0.01")),
-                       "sold": sold.quantize(Decimal("0.01")), "invested_net": (gross - sold).quantize(Decimal("0.01")),
-                       "gain": (value - (gross - sold)).quantize(Decimal("0.01")), "positions": held, "estimated_positions": est})
+        series.append({"date": d.isoformat(), "value": value.quantize(CENT), "securities": securities.quantize(CENT),
+                       "deposits": deposit.quantize(CENT), "invested_gross": gross.quantize(CENT),
+                       "sold": sold.quantize(CENT), "invested_net": (gross - sold).quantize(CENT),
+                       "gain": (value - (gross - sold)).quantize(CENT), "positions": held, "estimated_positions": est})
         d += timedelta(days=1)
     return {"series": series, "estimated_days": estimated_days, "no_history": no_history, "first_date": first.isoformat()}

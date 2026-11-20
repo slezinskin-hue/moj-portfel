@@ -16,6 +16,7 @@ PPK - "Oszczednosci emerytalne" (decyzja uzytkownika 2026-11-19, docs/PPK.md). W
 """
 import calendar
 import re
+import threading
 from datetime import date, timedelta
 from decimal import ROUND_DOWN, Decimal
 
@@ -375,9 +376,37 @@ def account_model(cur, aid, joined, end):
     return {"flows": sorted(by_day.items()), "daily": daily, "paid": anchors[-1][2], "value": anchors[-1][1], "anchors": anchors, "annual_rates": rates}
 
 
+_MODEL_CACHE = {}
+_MODEL_CACHE_LOCK = threading.Lock()
+
+
+def _model_fingerprint(cur):
+    """Skrot WSZYSTKICH danych, z ktorych liczy sie model (rachunki, ich nazwy, migawki i ich linie) - inny skrot = liczymy od nowa.
+    Skrot z tresci (nie z licznikow), wiec jest poprawny takze dla innej bazy w tym samym procesie (testy)."""
+    cur.execute("""select md5(coalesce((select string_agg(ra::text || '#' || a.display_name, '|' order by ra.account_id)
+                                         from retirement_accounts ra join accounts a using (account_id)), '')
+                              || '/' || coalesce((select string_agg(s::text, '|' order by s.snapshot_id) from ppk_snapshots s), '')
+                              || '/' || coalesce((select string_agg(l::text, '|' order by l.snapshot_id, l.category_code) from ppk_snapshot_lines l), ''))""")
+    return cur.fetchone()[0]
+
+
 def model(cur, end=None):
-    """Wszystkie aktywne rachunki PPK razem: {"flows", "daily", "paid", "value", "gain", "start", "unmodeled": [nazwy]}; flows/daily posortowane."""
+    """Wszystkie aktywne rachunki PPK razem: {"flows", "daily", "paid", "value", "gain", "start", "unmodeled": [nazwy]}; flows/daily posortowane.
+    Wynik z pamieci podrecznej, gdy dane PPK (skrot tresci) i dzien konca sa te same; zwracana jest kopia (wolajacy moze ja zmieniac)."""
     end = end or date.today()
+    key = (_model_fingerprint(cur), end)
+    with _MODEL_CACHE_LOCK:
+        hit = _MODEL_CACHE.get(key)
+    if hit is None:
+        hit = _model(cur, end)
+        with _MODEL_CACHE_LOCK:
+            if len(_MODEL_CACHE) > 16:
+                _MODEL_CACHE.clear()
+            _MODEL_CACHE[key] = hit
+    return dict(hit, flows=list(hit["flows"]), daily=dict(hit["daily"]), unmodeled=list(hit["unmodeled"]))
+
+
+def _model(cur, end):
     cur.execute("""select ra.account_id, a.display_name, ra.joined_on from retirement_accounts ra join accounts a using (account_id)
                    where ra.status = 'ACTIVE' order by 1""")
     flows, daily, paid, value, unmodeled, start = {}, {}, Decimal(0), Decimal(0), [], None

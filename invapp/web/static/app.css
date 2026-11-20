@@ -66,6 +66,12 @@ button { font: inherit; color: inherit; }
 .iform label { display: flex; flex-direction: column; gap: 3px; font-size: .78rem; color: var(--muted); font-weight: 600; }
 .iform input, .iform select, td input, td select { border: 1px solid var(--line2); background: var(--card2); color: var(--ink); border-radius: 8px; padding: 6px 9px; font: inherit; font-size: .88rem; }
 .iform input[name=nazwa] { min-width: 240px; }
+.bug-form { display: grid; gap: 10px; margin-top: 12px; }
+.bug-form > label:not(.check) { display: flex; flex-direction: column; gap: 4px; font-size: .82rem; color: var(--ink2); font-weight: 600; }
+.bug-form input:not([type=checkbox]), .bug-form textarea { border: 1px solid var(--line2); background: var(--card2); color: var(--ink); border-radius: 8px; padding: 7px 10px; font: inherit; font-size: .88rem; font-weight: 400; resize: vertical; }
+.bug-preview { white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: var(--card2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: .8rem; margin: 0; }
+.warn-note { border-left: 3px solid var(--warn, #d97706); padding-left: 10px; }
+#bug-open[aria-disabled=true] { opacity: .45; pointer-events: none; }
 td input { width: 130px; padding: 4px 7px; }
 .exp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 22px; }
 .exp-grid h3 { font-size: .95rem; margin: 0 0 8px; }

@@ -26,6 +26,7 @@
     <button id="refresh" class="icon-btn" title="Odśwież ceny teraz">⟳</button>
     <button id="theme" class="icon-btn" title="Jasny / ciemny motyw">◐</button>
     <button id="settings-btn" class="icon-btn" title="Ustawienia (źródło cen i kursów, gotówka)">⚙</button>
+    <button id="bug-btn" class="icon-btn" title="Zgłoś błąd autorowi aplikacji">🐞</button>
     <button id="quit" class="icon-btn" title="Zamknij aplikację (serwer i bazę)">⏻</button>
     <button class="btn primary open-import">＋ Wczytaj pliki</button>
   </div>
@@ -399,8 +400,36 @@
     <div class="acts"><button class="btn primary" id="set-close">Gotowe</button></div>
   </div>
 </div>
+<div class="modal-bg" id="bug-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="bug-title">
+  <div class="modal">
+    <h2 id="bug-title">Zgłoś błąd</h2>
+    <p class="muted">Opisz, co nie działa – zgłoszenie trafi do autora aplikacji na GitHubie (powiadomienie o nowym zgłoszeniu).</p>
+    <p class="note warn-note">Zgłoszenie jest <b>publiczne</b> i wymaga darmowego konta GitHub. Nie wpisuj kwot, nazw kont, numerów rachunków ani danych osobowych –
+      aplikacja nie dołącza żadnych danych portfela, a e-maile, długie numery i nazwę użytkownika w ścieżkach maskuje sama.</p>
+    <form id="bug-form" class="bug-form" autocomplete="off">
+      <label>Krótki tytuł <input name="tytul" maxlength="120" required placeholder="np. Wykres nie pokazuje dywidend z TR"></label>
+      <label>Co się stało? <textarea name="opis" rows="4" maxlength="4000" required placeholder="Co widzisz i w którym miejscu aplikacji"></textarea></label>
+      <label>Jak to powtórzyć? <span class="muted">(opcjonalnie)</span> <textarea name="kroki" rows="3" maxlength="2000" placeholder="1. Otwórz… 2. Kliknij…"></textarea></label>
+      <label>Czego się spodziewałeś? <span class="muted">(opcjonalnie)</span> <textarea name="oczekiwane" rows="2" maxlength="1000"></textarea></label>
+      <label class="check"><input type="checkbox" name="techniczne" checked> <span>Dołącz informacje techniczne <span class="muted">(wersja aplikacji, system, tryb okna, zakładka)</span></span></label>
+      <div class="acts"><button class="btn primary" type="submit">Pokaż zgłoszenie</button><button class="btn" type="button" id="bug-cancel">Anuluj</button></div>
+    </form>
+    <div id="bug-ready" hidden>
+      <p class="note" id="bug-mask" hidden></p>
+      <p class="muted" style="margin:10px 0 4px">Tak będzie wyglądać zgłoszenie (możesz je jeszcze poprawić na GitHubie przed wysłaniem):</p>
+      <pre class="bug-preview" id="bug-preview"></pre>
+      <div class="acts">
+        <a class="btn primary" id="bug-open" href="#" target="_blank" rel="noopener noreferrer">Otwórz zgłoszenie na GitHubie ↗</a>
+        <button class="btn" type="button" id="bug-copy">Kopiuj treść</button>
+        <button class="btn ghost" type="button" id="bug-back">Popraw</button>
+      </div>
+      <p class="note" id="bug-norepo" hidden>Ta kopia aplikacji nie ma przypisanego repozytorium na GitHubie – skopiuj treść i wyślij ją autorowi.</p>
+      <p class="note">Na GitHubie kliknij „Create” / „Submit new issue”. Bez konta GitHub: „Kopiuj treść” i wyślij ją autorowi inną drogą.</p>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
-<footer>{{ app_name }} {{ version }} · <a href="#" id="upd-check">Sprawdź aktualizacje</a> · aplikacja lokalna (127.0.0.1) · ceny: Yahoo Finance, kursy: Yahoo / NBP</footer>
+<footer>{{ app_name }} {{ version }} · <a href="#" id="upd-check">Sprawdź aktualizacje</a> · <a href="#" id="bug-link">Zgłoś błąd</a> · aplikacja lokalna (127.0.0.1) · ceny: Yahoo Finance, kursy: Yahoo / NBP</footer>
 <script src="/static/charts.js?v={{ static_v }}"></script>
 <script src="/static/app.js?v={{ static_v }}"></script>
 </body>

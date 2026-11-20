@@ -236,11 +236,13 @@ def _pricing_pass():
     Blad kroku nie przerywa pozostalych."""
     from invapp.pricing import benchmarks, history, profiles, service
     from invapp.pricing.providers import NbpProvider, YahooProvider
+    from invapp.web import dashboard
     conn = owner_conn()
     try:
         prov = YahooProvider()
         ph = _phase_steps(conn, prov)
-        quotes = ("Notowania i kursy na żywo", lambda: service.refresh_quotes(conn, YahooProvider()), True)
+        # krok notowan pod blokada odswiezania ze strony (dashboard.refresh_quotes_shared): strona otwarta w tym czasie nie pobiera tych samych cen drugi raz
+        quotes = ("Notowania i kursy na żywo", lambda: dashboard.refresh_quotes_shared(conn), True)
         steps = [(t, f, False) for t, f in ph["quick"]] + [quotes]
         if ph["slow"]:
             steps += [(t, f, False) for t, f in ph["slow"]] + [("Notowania dla uzupełnionych instrumentów", quotes[1], True)]
@@ -248,16 +250,19 @@ def _pricing_pass():
         steps += [("Ceny historyczne i kursy dzienne", lambda: history.refresh_history(conn, history.HistoryYahoo()), True),
                   ("Indeksy do porównania", lambda: benchmarks.refresh(conn, history.HistoryYahoo()), True),
                   ("Kursy dzienne waluty prezentacji", lambda: _display_currency_history(conn), True),
-                  ("Profile instrumentów (sektory)", lambda: profiles.refresh(conn, YahooProvider()), True),
+                  ("Profile instrumentów (sektory)", lambda: profiles.refresh(conn, YahooProvider()), None),      # None: tylko zakladka Ekspozycja (czytana przy wejsciu)
                   ("Kursy NBP", lambda: service.refresh_nbp(conn, NbpProvider()), True)]
         _set(steps=len(steps))
+        pending = False                 # kroki bez odswiezenia strony (np. powiazania symboli) moga zmienic dane - nastepny krok z odswiezeniem odswieza zawsze
         for i, (title, fn, bumps) in enumerate(steps, 1):
             _set(step=title, step_no=i); _log("start: " + title)
             try:
                 res = fn(); conn.commit()
                 _log(f"gotowe: {title}" + (f" ({len(res)} pozycji)" if isinstance(res, list) else ""))
-                if bumps:
-                    from invapp.web import dashboard
+                if bumps is False:
+                    pending = True
+                if bumps and (pending or _changed(res)):
+                    pending = False
                     dashboard.invalidate_history()
                     with _state_lock:
                         STATE["version"] += 1
@@ -265,6 +270,20 @@ def _pricing_pass():
                 conn.rollback(); _log(f"pominięto ({type(e).__name__}): {title}")
     finally:
         conn.close()
+
+
+def _changed(res):
+    """Czy krok zmienil dane, ktore pokazuje strona (inaczej strona nie przeladowuje wykresu, wskaznikow i kontroli bez potrzeby).
+    Rozpoznawane tylko kroki, ktore jawnie mowia "nic nowego": notowania bez nowej ceny i kursu, NBP bez nowej tabeli, kursy waluty
+    prezentacji przy PLN. Kazdy inny wynik = zmiana (jak dotad)."""
+    if isinstance(res, dict):
+        if "quotes_new" in res and "fx_new" in res:
+            return bool(res["quotes_new"] or res["fx_new"])
+        if "table" in res and "added" in res:
+            return bool(res["added"])
+        if res == {"waluta": "PLN"}:
+            return False
+    return True
 
 
 def _display_currency_history(conn):

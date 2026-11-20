@@ -155,37 +155,85 @@ def _income_tables_in(cur, data, code):
 
 
 # ---------------------------------------------------------------- ceny na zywo, historia, wskazniki, kontrola
-_cache = {"live_at": 0.0, "hist": {}}
+# Pamiec podreczna: "hist" - gotowa seria strony (zakres, waluta), "raw" - surowa seria history.build_series (PLN) zakresu, wspolna dla
+# wykresu zakresu i skladnikow portfela WSZYSTKIE (klucz: zakres + dzien; skladniki WSZYSTKIE zawsze z jednego liczenia - "batch").
+# "gen" rosnie przy kazdym uniewaznieniu - wynik liczony w trakcie uniewaznienia nie jest zapamietywany ("live_gen" - to samo dla czasu notowan).
+# Blokady osobno: _lock chroni tylko slowniki (krotko), _live_lock - pobieranie notowan z sieci (wykres nie czeka na Yahoo),
+# _build_lock(klucz) - jedno liczenie danej serii naraz (rownolegle zadania /api/historia i /api/wskazniki nie licza jej dwa razy).
+_cache = {"live_at": 0.0, "hist": {}, "raw": {}, "gen": 0, "live_gen": 0, "batch": 0}
 _lock = threading.Lock()
+_live_lock = threading.Lock()
+_build_locks = {}
 LIVE_MIN_INTERVAL = 45      # sekundy: nie odpytujemy dostawcy czesciej (limit zapytan, uprzejmosc wobec uslugi)
 HIST_TTL = 120
+
+
+def _build_lock(key):
+    with _lock:
+        return _build_locks.setdefault(key, threading.Lock())
 
 
 def refresh_live_if_stale(force=False):
     """Odswieza notowania i kursy (rola aplikacji: tylko dopisywanie danych referencyjnych), nie czesciej niz co LIVE_MIN_INTERVAL s."""
     from invapp.pricing import service
     from invapp.pricing.providers import YahooProvider
-    with _lock:
+    with _live_lock:
         if not force and _time.time() - _cache["live_at"] < LIVE_MIN_INTERVAL:
             return {"skipped": True}
+        g = _cache["live_gen"]
         conn = _connect()
         try:
             res = service.refresh_quotes(conn, YahooProvider(), pause=0.05)
             conn.commit()
         finally:
             conn.close()
-        _cache["live_at"] = _time.time()
+        _mark_live(g)
         return res
 
 
-def live_data(scope_key="all"):
-    """Podsumowanie zakresu (bez wolnych srodkow) i pozycje: ilosc, cena z API w walucie notowania, kurs, wartosc w walucie notowania i w PLN."""
+def _mark_live(g):
+    """Czas ostatniego pobrania notowan - chyba ze w trakcie pobierania uniewazniono pamiec (np. zapis ustawien): wtedy nastepne zadanie pobiera od nowa."""
+    with _lock:
+        if _cache["live_gen"] == g:
+            _cache["live_at"] = _time.time()
+
+
+def refresh_quotes_shared(conn):
+    """Krok zadania w tle "notowania na zywo": pod ta sama blokada co odswiezanie ze strony, z zapisem przed jej zwolnieniem - strona otwarta
+    w tym czasie nie pobiera tych samych notowan drugi raz, tylko czeka i uzywa zapisanych (licznik LIVE_MIN_INTERVAL liczony od tego pobrania)."""
+    from invapp.pricing import service
+    from invapp.pricing.providers import YahooProvider
+    with _live_lock:
+        g = _cache["live_gen"]
+        res = service.refresh_quotes(conn, YahooProvider())
+        conn.commit()
+        _mark_live(g)
+        return res
+
+
+def live_data(scope_key="all", summary_only=False):
+    """Podsumowanie zakresu (bez wolnych srodkow) i pozycje: ilosc, cena z API w walucie notowania, kurs, wartosc w walucie notowania i w PLN.
+    summary_only=True: tylko podsumowanie (scope) - pozycje nie sa liczone (wskazniki potrzebuja tylko wartosci i kosztu); scope identyczne."""
     code = scope_code(normalize_scope(scope_key))
     conn = _connect(readonly=True)
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("select * from v_scope_summary where scope_code = %s", (code,))
         row = cur.fetchone()
+        if summary_only:
+            scope = dict(row) if row else None
+            pcur = conn.cursor()
+            if scope is not None:
+                from invapp.pricing import positions as pos_calc
+                add_deposits(scope, deposits_of(conn, code))
+                add_cash(scope, conn, normalize_scope(scope_key), code)
+                scope["income_12m"] = pos_calc.income_12m(pcur, _scope_accounts(pcur, code))
+            out = {"scope": scope, "positions": [], "deposits": [], "waluta": "PLN"}
+            w = _display(pcur)
+            if w != "PLN":
+                from invapp.pricing import currency
+                out = currency.convert_live(pcur, out, w, _scope_accounts(pcur, code))
+            return out
         cur.execute("""select p.listing_id, a.display_name as account, a.product_type, f.code as broker, sum(p.value_used) as value, sum(p.qty) as qty
                        from v_live_position_values p join accounts a using (account_id) join financial_institutions f on f.broker_id = a.broker_id
                        where p.account_id in (select sa.account_id from scope_accounts sa join scopes s using (scope_id) where s.code = %s)
@@ -411,37 +459,104 @@ def add_deposits(scope, deps):
 
 
 def history_data(scope_key="all"):
-    from invapp.pricing import history
+    """Seria dzienna strony (wykres, wskazniki) z pamieci podrecznej; wynik tylko do odczytu (wolajacy kopiuje dni przed zmiana)."""
     code = scope_code(normalize_scope(scope_key))
-    from invapp.pricing import benchmarks, currency
     conn = _connect(readonly=True)
     try:
         w = _display(conn.cursor())
-        with _lock:
-            hit = _cache["hist"].get((code, w))
-            if hit and _time.time() - hit[0] < HIST_TTL:
-                return hit[1]
-        s = history.build_series(conn, code)
-        if code == scope_code("all"):                         # PPK tylko w portfelu WSZYSTKIE
-            _merge_ppk(conn.cursor(), s)
-            _add_parts(conn, s)
-        try:                                                    # indeksy do porownania (wykres "Zwrot %"), w PLN, na dni serii
-            s["porownanie"] = benchmarks.levels(conn, [date.fromisoformat(p["date"]) for p in s["series"]])
-        except psycopg2.Error:
-            conn.rollback(); s["porownanie"] = None
-        s["waluta"] = w
-        if w != "PLN":                                          # waluta prezentacji: wartosc dnia / kurs(d), przeplywy / kurs(dnia przeplywu)
-            r = currency.Rates(conn.cursor(), w)
-            cs = currency.convert_series(s["series"], r)
-            s["series"], s["estimated_fx_days"] = cs["series"], cs["estimated_fx_days"]
-            if s.get("porownanie"):
-                ks = [p["fx"] for p in s["series"]]
-                s["porownanie"]["poziomy"] = {key: [(v / float(k)) if (v is not None and k) else None for v, k in zip(lv, ks)]
-                                             for key, lv in s["porownanie"]["poziomy"].items()}
+        hit = _hist_hit((code, w))
+        if hit is not None:
+            return hit
+        with _build_lock(("hist", code, w)):                 # rownolegle zadanie tej samej serii czeka na wynik zamiast liczyc ja drugi raz
+            hit = _hist_hit((code, w))
+            if hit is not None:
+                return hit
+            with _lock:
+                gen = _cache["gen"]
+            s = _history_build(conn, code, w)
     finally:
         conn.close()
     with _lock:
-        _cache["hist"][(code, w)] = (_time.time(), s)
+        if _cache["gen"] == gen:
+            _cache["hist"][(code, w)] = (_time.time(), s, date.today())
+    return s
+
+
+def _hist_hit(key):
+    with _lock:
+        hit = _cache["hist"].get(key)
+        return hit[1] if hit and _time.time() - hit[0] < HIST_TTL and hit[2] == date.today() else None
+
+
+def _raw_hit(code):
+    """(seria, batch) z pamieci albo None. Wywolujacy trzyma _lock."""
+    hit = _cache["raw"].get((code, date.today()))
+    return (hit[1], hit[2]) if hit and _time.time() - hit[0] < HIST_TTL else None
+
+
+def _raw_series(conn, code):
+    """history.build_series(conn, code) z pamieci podrecznej (wspolna dla wykresu zakresu i skladnikow WSZYSTKIE). Wynik tylko do odczytu."""
+    from invapp.pricing import history
+    with _lock:
+        hit = _raw_hit(code)
+    if hit:
+        return hit[0]
+    with _build_lock(("raw",)):
+        with _lock:
+            hit = _raw_hit(code); gen = _cache["gen"]; _cache["batch"] += 1; batch = _cache["batch"]
+        if hit:
+            return hit[0]
+        s = history.build_series(conn, code)
+        with _lock:
+            if _cache["gen"] == gen:
+                _cache["raw"][(code, date.today())] = (_time.time(), s, batch)
+        return s
+
+
+def _raw_together(conn, codes):
+    """Surowe serie kilku zakresow z JEDNEGO liczenia (jak dawniej: suma WSZYSTKIE i skladniki brokerow liczone razem, wiec zawsze sie zgadzaja):
+    z pamieci tylko wtedy, gdy wszystkie pochodza z tego samego liczenia; inaczej wszystkie liczone od nowa."""
+    from invapp.pricing import history
+    with _build_lock(("raw",)):
+        with _lock:
+            hits = [_raw_hit(c) for c in codes]; gen = _cache["gen"]
+        if all(hits) and len({b for _, b in hits}) == 1:
+            return [s for s, _ in hits]
+        with _lock:
+            _cache["batch"] += 1; batch = _cache["batch"]
+        out = [history.build_series(conn, c) for c in codes]
+        with _lock:
+            if _cache["gen"] == gen:
+                for c, s in zip(codes, out):
+                    _cache["raw"][(c, date.today())] = (_time.time(), s, batch)
+        return out
+
+
+def _history_build(conn, code, w):
+    """Seria zakresu w walucie prezentacji: surowa seria (kopia) + PPK i skladniki (WSZYSTKIE) + indeksy do porownania + przeliczenie waluty."""
+    from invapp.pricing import benchmarks, currency
+    if code == scope_code("all"):                         # suma i skladniki brokerow z jednego liczenia
+        raws = _raw_together(conn, [code] + [b.scope_code for b in brokers.BROKERS])
+        raw, parts = raws[0], dict(zip([b.scope_code for b in brokers.BROKERS], raws[1:]))
+    else:
+        raw, parts = _raw_series(conn, code), None
+    s = dict(raw, series=[dict(p) for p in raw["series"]])     # kopia: dalsze kroki zmieniaja dni serii
+    if code == scope_code("all"):                         # PPK tylko w portfelu WSZYSTKIE
+        _merge_ppk(conn.cursor(), s)
+        _add_parts(conn, s, parts)
+    try:                                                    # indeksy do porownania (wykres "Zwrot %"), w PLN, na dni serii
+        s["porownanie"] = benchmarks.levels(conn, [date.fromisoformat(p["date"]) for p in s["series"]])
+    except psycopg2.Error:
+        conn.rollback(); s["porownanie"] = None
+    s["waluta"] = w
+    if w != "PLN":                                          # waluta prezentacji: wartosc dnia / kurs(d), przeplywy / kurs(dnia przeplywu)
+        r = currency.Rates(conn.cursor(), w)
+        cs = currency.convert_series(s["series"], r)
+        s["series"], s["estimated_fx_days"] = cs["series"], cs["estimated_fx_days"]
+        if s.get("porownanie"):
+            ks = [p["fx"] for p in s["series"]]
+            s["porownanie"]["poziomy"] = {key: [(v / float(k)) if (v is not None and k) else None for v, k in zip(lv, ks)]
+                                         for key, lv in s["porownanie"]["poziomy"].items()}
     return s
 
 
@@ -482,13 +597,14 @@ def _merge_ppk(cur, s):
     s["ppk"] = {"od": m["start"].isoformat(), "wplaty": m["paid"], "wartosc": m["value"], "bez_modelu": m["unmodeled"]}
 
 
-def _add_parts(conn, s):
+def _add_parts(conn, s, raw_parts=None):
     """Skladniki wartosci portfela WSZYSTKIE na wykresie (do wlaczania/wylaczania): kazdy broker (seria jego zakresu - te same zasady)
-    i PPK (gdy wliczane). Pola "c_<kod>" w kazdym dniu; suma skladnikow = wartosc dnia (test)."""
+    i PPK (gdy wliczane). Pola "c_<kod>" w kazdym dniu; suma skladnikow = wartosc dnia (test).
+    raw_parts: {kod zakresu: seria} policzone razem z suma (_raw_together); bez nich - liczone teraz."""
     from invapp.pricing import history
     series, parts = s["series"], []
     for b in brokers.BROKERS:
-        bs = history.build_series(conn, b.scope_code)["series"]
+        bs = (raw_parts[b.scope_code] if raw_parts else history.build_series(conn, b.scope_code))["series"]   # seria zakresu brokera (z tego samego liczenia co suma)
         if not bs:
             continue
         val = {p["date"]: p["value"] for p in bs}
@@ -505,12 +621,14 @@ def _add_parts(conn, s):
 
 def invalidate_history():
     with _lock:
-        _cache["hist"] = {}
+        _cache["hist"], _cache["raw"] = {}, {}
+        _cache["gen"] += 1
 
 
 def invalidate_caches():
     with _lock:
-        _cache["hist"], _cache["live_at"] = {}, 0.0
+        _cache["hist"], _cache["raw"], _cache["live_at"] = {}, {}, 0.0
+        _cache["gen"] += 1; _cache["live_gen"] += 1
 
 
 def metrics_data(scope_key="all"):
@@ -519,7 +637,7 @@ def metrics_data(scope_key="all"):
     scope_key = normalize_scope(scope_key); code = scope_code(scope_key)
     s = history_data(scope_key)
     series = [dict(p) for p in s["series"]]
-    live = live_data(scope_key)
+    live = live_data(scope_key, summary_only=True)                        # tylko podsumowanie (wartosc, koszt) - pozycje niepotrzebne
     cost_left = None
     if series and live.get("scope"):
         series[-1]["value"] = live["scope"]["assets_value"]                  # papiery na zywo + lokaty
