@@ -19,6 +19,24 @@ LIVE = os.environ.get("INVAPP_LIVE") == "1"
 MAX_AGE = timedelta(days=7)          # notowanie starsze = zrodlo nie podaje swiezych cen (dluzsze swieta gield < 7 dni)
 
 
+RETRY_WAITS = (30, 90)               # chwilowa awaria uslugi (5xx, brak polaczenia) != zmiana formatu: ponowna proba po 30 s i 90 s
+
+
+def _retry(fn, *a, **kw):
+    """Wywolanie z ponowieniem TYLKO przy bledzie serwera/sieci. Zly ksztalt odpowiedzi (ProviderError, KeyError) pada od razu."""
+    import time, urllib.error
+    for wait in RETRY_WAITS + (None,):
+        try:
+            return fn(*a, **kw)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 and e.code != 429 or wait is None:
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if wait is None:
+                raise
+        time.sleep(wait)
+
+
 def _repo():
     """Repozytorium wydan: jak instalator (GITHUB_REPOSITORY w Actions), lokalnie z adresu origin - bez nazwy wpisanej w kod."""
     import re, subprocess
@@ -38,9 +56,10 @@ class TestYahoo(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from invapp.pricing.history import HistoryYahoo
-        from invapp.pricing.providers import YahooProvider
-        cls.y = YahooProvider()
-        cls.h = HistoryYahoo()
+        from invapp.pricing.providers import YahooProvider, http_get
+        fetch = lambda url: _retry(http_get, url)
+        cls.y = YahooProvider(fetch=fetch)
+        cls.h = HistoryYahoo(fetch=fetch)
 
     def _fresh_quote(self, symbol, currency, unit="MAJOR"):
         q = self.y.quote(symbol)
@@ -101,8 +120,8 @@ class TestYahoo(unittest.TestCase):
 @unittest.skipUnless(LIVE, "kontrola zrodel zewnetrznych tylko z INVAPP_LIVE=1 (wymaga internetu)")
 class TestNbp(unittest.TestCase):
     def test_table_a(self):
-        from invapp.pricing.providers import NbpProvider
-        t = NbpProvider().table_a()
+        from invapp.pricing.providers import NbpProvider, http_get
+        t = NbpProvider(fetch=lambda url: _retry(http_get, url)).table_a()
         self.assertLess((date.today() - date.fromisoformat(t["date"])).days, 7)
         for c in ("USD", "EUR", "GBP", "CHF"):
             self.assertIn(c, t["rates"])
@@ -116,8 +135,10 @@ class TestXtbOmi(unittest.TestCase):
         import urllib.request
         from invapp.brokers.xtb.broker import OMI_URL
         req = urllib.request.Request(OMI_URL, headers={"User-Agent": "Mozilla/5.0 investing-app-local", "Range": "bytes=0-1023"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            head = r.read(1024)
+        def get():
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read(1024)
+        head = _retry(get)
         self.assertTrue(head.startswith(b"%PDF"), "pod adresem OMI nie ma PDF-a")
 
 
@@ -129,7 +150,7 @@ class TestGithubRelease(unittest.TestCase):
         repo = _repo()
         if not repo:
             self.skipTest("nieznane repozytorium (GITHUB_REPOSITORY / INVAPP_UPDATE_REPO / git remote origin)")
-        rel = updates.latest_release({"repo": repo})
+        rel = updates.latest_release({"repo": repo}, fetch=lambda url: _retry(updates._get_json, url))
         self.assertIsNotNone(rel)
         self.assertTrue(rel["installer_name"].lower().endswith(".exe"))
         self.assertTrue(updates._allowed(rel["installer_url"], repo))
