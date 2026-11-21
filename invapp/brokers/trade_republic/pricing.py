@@ -95,4 +95,82 @@ def resolve_tr_listings(conn, provider, pause=0.3, broker_code="TR"):
     return out
 
 
+def resolve_closed_history(conn, provider, start=None, broker_code="TR", recheck_days=7):
+    """Symbol HISTORII dla ZAMKNIETYCH pozycji (decyzja uzytkownika 2026-11-21): bez niego wykres wycenial je w czasie posiadania
+    ostatnia cena transakcji (oszacowanie). Dzisiejsza cena nie nadaje sie do weryfikacji (pozycja sprzedana dawno temu), wiec kandydat z
+    wyszukiwania po ISIN jest sprawdzany na HISTORII: cena kazdej transakcji TR (PLN) / (zamkniecie dnia x kurs dnia do PLN) w [0,8; 1,25]
+    dla >= 75% transakcji; splity dostawcy spoza ksiegi cofniete (jak w pricing/history). Zapis tylko powiazania historii (YAHOO_1D)."""
+    from datetime import timedelta
+    from invapp.pricing import history as h
+    cur = conn.cursor(); out = []
+    cur.execute("""select l.listing_id, la.broker_symbol from listings l join listing_aliases la on la.listing_id = l.listing_id and la.valid_to is null
+                   where la.broker_id = (select broker_id from financial_institutions where code = %s)
+                     and exists (select 1 from transactions t where t.listing_id = l.listing_id and t.txn_type in ('BUY','SELL') and t.status = 'ACTIVE')
+                     and not exists (select 1 from derived_lots dl where dl.listing_id = l.listing_id and dl.qty_remaining > 0)
+                     and not exists (select 1 from listing_provider_symbols m where m.listing_id = l.listing_id and m.provider = %s
+                                       and (m.status = 'VERIFIED' or m.checked_at > now() - make_interval(days => %s)))
+                   order by la.broker_symbol""", (broker_code, h.HIST_PROVIDER, recheck_days))
+    rows = cur.fetchall()
+    fx_cache = {}
+    for listing_id, isin in rows:
+        cur.execute("""select (occurred_at at time zone 'UTC')::date, price from transactions
+                       where listing_id = %s and txn_type in ('BUY','SELL') and status = 'ACTIVE' and price is not null order by occurred_at""", (listing_id,))
+        trades = [(d, Decimal(p)) for d, p in cur.fetchall()]
+        conf = h._confirmed_actions(cur, [listing_id]).get(listing_id, [])
+        ev = {"isin": isin, "trades": len(trades), "candidates": []}
+        best = None
+        first = (start or (trades[0][0] if trades else None))
+        try:
+            cands = provider.search(isin) if trades else []
+        except Exception as e:  # noqa: BLE001
+            cands = []; ev["reason"] = f"błąd wyszukiwania: {type(e).__name__}"
+        for c in cands:
+            row = {"symbol": c["symbol"], "exchange": c.get("exchange")}
+            try:
+                hc = provider.daily(c["symbol"], first - timedelta(days=10))
+                ccy = hc["currency"]
+                if ccy != "PLN" and ccy not in fx_cache:
+                    fx_cache[ccy] = provider.daily(f"{ccy}PLN=X", first - timedelta(days=10))["closes"]
+                um = h._unmatched(hc.get("splits") or [], conf)
+                ratios = []
+                for d, price in trades:
+                    close = h._close_on(hc["closes"], d)
+                    rate = Decimal(1) if ccy == "PLN" else h._close_on(fx_cache[ccy], d)
+                    if close and rate:
+                        ratios.append(price / (close * h._factor(um, d) * rate))
+                ok = [r for r in ratios if Decimal("0.8") <= r <= Decimal("1.25")]
+                med = sorted(ratios)[len(ratios) // 2] if ratios else None
+                row.update({"currency": ccy, "compared": len(ratios), "matching": len(ok), "median_ratio": med.quantize(Decimal("0.0001")) if med else None})
+                if ratios and Decimal(len(ok)) / len(ratios) >= h.MATCH_SHARE and (best is None or abs(med - 1) < abs(best[2] - 1)):
+                    best = (c, hc, med)
+            except Exception as e:  # noqa: BLE001
+                row["error"] = type(e).__name__
+            ev["candidates"].append(row)
+        status = "VERIFIED" if best else ("REJECTED" if cands else "PENDING")
+        if not best and "reason" not in ev:
+            ev["reason"] = ("żaden kandydat nie zgadza się z cenami transakcji w historii" if cands
+                            else ("brak transakcji z ceną" if not trades else "dostawca nie zna tego ISIN"))
+        sym = best[0]["symbol"] if best else ""
+        if best:
+            ev.update({"chosen": sym, "provider_currency": best[1]["raw_currency"]})
+            h._store_splits(cur, listing_id, h.HIST_PROVIDER, sym, best[1].get("splits") or [])
+        cur.execute("""insert into listing_provider_symbols(listing_id,provider,provider_symbol,status,quote_currency,price_unit,reference_exchange,checked_at,evidence)
+                       values (%s,%s,%s,%s,%s,%s,%s,now(),%s)
+                       on conflict (listing_id, provider) do update set provider_symbol=excluded.provider_symbol, status=excluded.status, quote_currency=excluded.quote_currency,
+                         price_unit=excluded.price_unit, reference_exchange=excluded.reference_exchange, checked_at=excluded.checked_at, evidence=excluded.evidence""",
+                    (listing_id, h.HIST_PROVIDER, sym, status, best[1]["currency"] if best else None, "MAJOR" if best else None,
+                     best[0].get("exchange") if best else None, Json(jsonable(ev))))
+        if best:
+            src = f"Yahoo Finance (symbol {sym}, ISIN {isin}), {time.strftime('%Y-%m-%d')}; zgodność cen transakcji TR w PLN z historią (mediana ilorazu {best[2].quantize(Decimal('0.01'))})"
+            cur.execute("savepoint cur_upd")
+            try:
+                cur.execute("""update listings set trading_currency=%s, currency_status='ZGODNY_ZRODLO_ZEWN', currency_source=%s, currency_checked_at=now(), currency_evidence=%s
+                               where listing_id=%s and trading_currency is null""", (best[1]["currency"], src, Json(jsonable(ev)), listing_id))
+                cur.execute("release savepoint cur_upd")
+            except Exception:  # noqa: BLE001  (ta sama linia handlowa istnieje juz jako inne notowanie) - waluta zostaje w dowodach powiazania
+                cur.execute("rollback to savepoint cur_upd")
+        out.append({"isin": isin, "symbol": sym or None, "status": status, "reason": ev.get("reason")})
+    return out
+
+
 resolve_isin_listings = resolve_tr_listings          # nazwa ogolna dla nowych brokerow (ISIN + ceny w PLN)

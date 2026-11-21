@@ -9,7 +9,7 @@ invapp/
   db/
     engine.py               wbudowany PostgreSQL 16 (binarki z pakietu pgserver, serwerem zarządza pg_ctl): inicjalizacja, role, hasła, migracje
     migrate.py              migracje SQL (sumy SHA-256, numeracja ciągła)
-    migrations/0001…0020    schemat: księga, partie, zakresy, widoki wyceny i wyniku, lokaty, indeksy, ustawienia, gotówka, PPK (baza)
+    migrations/0001…0021    schemat: księga, partie, zakresy, widoki wyceny i wyniku, lokaty, indeksy, ustawienia, gotówka, PPK (baza), splity dostawcy
     backup.py               kopie zapasowe (pg_dump z wbudowanego serwera)
   core/
     common.py               konwersje liczb, skróty wierszy, maskowanie danych osobowych
@@ -190,6 +190,29 @@ przed i po zmianach – 0 różnic; testy `tests/test_wydajnosc.py` + mutacje �
 * **Wykres w przeglądarce** (`charts.js`): przy przeciąganiu, kółku i zmianie rozmiaru rysowanie raz na klatkę (`requestRender`); okno liczone
   z bieżącego stanu, podpowiedź – z narysowanego obrazu; linia nawigatora zapamiętana (zależy tylko od danych, serii i rozmiaru);
   `buildMain` rysuje raz (dawniej `setData` + `applyRange` = dwa razy).
+
+## Historia cen: splity dostawcy, symbol po ISIN, ceny zastępcze (2026-11-21, migracja 0021)
+
+Diagnoza na prawdziwych danych: 410 z 1292 dni wykresu miało ceny **oszacowane** (ostatnia cena transakcji), bo dla pięciu instrumentów brakowało
+historii. Poprawki (`pricing/history.py`, `pricing/positions.py`, `brokers/trade_republic/pricing.py`) – wszystkie z weryfikacją, bez zgadywania:
+
+* **Splity dostawcy spoza księgi** (tabela `provider_splits`): Yahoo podaje stare zamknięcia przeliczone o każdy późniejszy split. Księga stosuje
+  tylko potwierdzone korekty (wtedy partie są w jednostkach po splicie i ceny pasują). Pozycja **zamknięta przed splitem** (SONY: sprzedana 06.2024,
+  split 5:1 10.2024) nie ma w księdze czego korygować – cena dnia `d` = zamknięcie × iloczyn splitów dostawcy **po** `d`, których nie ma wśród
+  potwierdzonych korekt (ten sam współczynnik, data ±31 dni). Tak samo przy weryfikacji symbolu, „Dziś” i wykresie pozycji.
+  Nowy split w oknie przyrostowym = ponowne pobranie **całej** historii (inaczej stare ceny zostałyby w jednostkach sprzed splitu).
+* **Symbol po ISIN**: gdy symbol z reguły rynku nie przechodzi weryfikacji (XMJP.DE – Yahoo 404), kandydaci z wyszukiwania po ISIN, każdy z tą
+  samą weryfikacją (waluta + ceny zakupów) – XMJP.DE → DBXJ.DE (ten sam fundusz, Xetra). ISIN z papieru albo ze specyfikacji brokera (`ISIN_SQL`).
+* **Zamknięte pozycje Trade Republic** (`resolve_closed_history`): symbol historii po ISIN, weryfikowany na **cenach transakcji** w PLN
+  (zamknięcie dnia × kurs dnia), bo dzisiejsza cena nie nadaje się do porównania z dawną sprzedażą.
+* **Cena zastępcza** (źródło `YAHOO_1D_PROXY`): gdy własna historia notowania zaczyna się później niż posiadanie (VUAA.DE: Yahoo od 30.12.2024),
+  ten sam ISIN z innej giełdy (VUAA.L, USD) – tylko w dni bez własnej ceny, przeliczony kursem dnia. Warunki: ≥ 20 dni wspólnych z własną historią,
+  ≥ 95% z nich w granicach 3% w PLN, ceny zakupów sprzed własnej historii zgodne (≥ 75% w [0,8; 1,25]). Seria ma `proxy_positions` / `proxy_days`
+  (opis pod wykresem), osobno od `estimated_*`.
+* **Wpływ** (dane właściciela, 2026-11-21): oszacowane dni 410 → 4 (przerwa świąteczna CNDX), 315 dni z ceną zastępczą; zmieniły się tylko dni
+  wcześniej oszacowane (maks. 537 zł dziennie); wpłaty, sprzedaże, bieżąca wartość, zysk i „Dziś” bez zmian. TWR 46,54% → 46,57%, zmienność
+  14,20% → 14,56% (oszacowania „płaskie” zaniżały wahania), XIRR i maks. obsunięcie bez zmian.
+* Testy: `tests/test_history.py` (`TestSplitsIsinProxy`, `TestTrClosedPositionHistory`), mutacje „historia 0021”, „pozycje 0021”, „TR 0021”.
 
 ## Zgłaszanie błędów (`invapp/zgloszenia.py`, `POST /api/zglos`)
 

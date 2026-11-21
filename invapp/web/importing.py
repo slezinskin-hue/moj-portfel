@@ -248,6 +248,8 @@ def _pricing_pass():
             steps += [(t, f, False) for t, f in ph["slow"]] + [("Notowania dla uzupełnionych instrumentów", quotes[1], True)]
         steps += [(t, f, False) for t, f in ph["history"]]
         steps += [("Ceny historyczne i kursy dzienne", lambda: history.refresh_history(conn, history.HistoryYahoo()), True),
+                  # po wlasnej historii (potrzebna do porownania); nic do sprawdzenia = bez przeladowania strony
+                  ("Ceny zastępcze (ten sam papier z innej giełdy)", lambda: {"proxy": history.verify_proxy_mappings(conn, history.HistoryYahoo())}, True),
                   ("Indeksy do porównania", lambda: benchmarks.refresh(conn, history.HistoryYahoo()), True),
                   ("Kursy dzienne waluty prezentacji", lambda: _display_currency_history(conn), True),
                   ("Profile instrumentów (sektory)", lambda: profiles.refresh(conn, YahooProvider()), None),      # None: tylko zakladka Ekspozycja (czytana przy wejsciu)
@@ -283,6 +285,8 @@ def _changed(res):
             return bool(res["added"])
         if res == {"waluta": "PLN"}:
             return False
+        if set(res) == {"proxy"}:                          # ceny zastepcze: zmiana tylko, gdy cos sprawdzono
+            return bool(res["proxy"])
     return True
 
 

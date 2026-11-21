@@ -14,31 +14,41 @@ Definicje (opisane tez w interfejsie, "Jak liczone"):
 from datetime import date, timedelta
 from decimal import Decimal as D
 
-from .history import SOURCE, STALE_DAYS
+from .history import PROXY_PROVIDER, PROXY_SOURCE, SOURCE, STALE_DAYS, _factor, split_factors
 
 INCOME_12M_DAYS = 365
 
 
 def prev_close_pln(cur, listing_ids, ref):
     """{listing_id: (cena w PLN, data zamkniecia)} na dzien `ref` - reguly jak w build_series (zamkniecie <= ref nie starsze niz STALE_DAYS,
-    kurs dzienny <= ref nie starszy niz STALE_DAYS; PLN = 1). Brak ceny lub kursu -> brak klucza."""
+    x wspolczynnik splitow dostawcy spoza ksiegi, kurs dzienny <= ref nie starszy niz STALE_DAYS; PLN = 1; bez wlasnej ceny - cena zastepcza).
+    Brak ceny lub kursu -> brak klucza."""
     ids = list(listing_ids)
     if not ids:
         return {}
-    cur.execute("""select distinct on (listing_id) listing_id, price_date, close_price, currency from prices
-                   where source = %s and listing_id = any(%s) and price_date <= %s order by listing_id, price_date desc""", (SOURCE, ids, ref))
-    closes = [r for r in cur.fetchall() if (ref - r[1]).days <= STALE_DAYS]
-    ccys = sorted({r[3] for r in closes} - {"PLN"})
+    cur.execute("""select distinct on (listing_id, source) listing_id, source, price_date, close_price, currency from prices
+                   where source = any(%s) and listing_id = any(%s) and price_date <= %s order by listing_id, source, price_date desc""",
+                ([SOURCE, PROXY_SOURCE], ids, ref))
+    closes = [r for r in cur.fetchall() if (ref - r[2]).days <= STALE_DAYS]
+    ccys = sorted({r[4] for r in closes} - {"PLN"})
     fx = {}
     if ccys:
         cur.execute("""select distinct on (base) base, rate_date, rate from fx_rates
                        where source = %s and quote = 'PLN' and base = any(%s) and rate_date <= %s order by base, rate_date desc""", (SOURCE, ccys, ref))
         fx = {b: D(r) for b, d, r in cur.fetchall() if (ref - d).days <= STALE_DAYS}
+    facs = {SOURCE: split_factors(cur, ids), PROXY_SOURCE: split_factors(cur, ids, PROXY_PROVIDER)}
     out = {}
-    for lst, d, close, ccy in closes:
+    for lst, src, d, close, ccy in sorted(closes, key=lambda r: r[1] != SOURCE):          # najpierw wlasna cena, potem zastepcza
+        if lst in out:
+            continue
         rate = D(1) if ccy == "PLN" else fx.get(ccy)
         if rate is not None:
-            out[lst] = (D(close) * rate, d)
+            c = D(close); um = facs[src].get(lst)
+            if um:
+                k = _factor(um, ref)
+                if k != 1:
+                    c = c * k
+            out[lst] = (c * rate if ccy != "PLN" else c, d)
     return out
 
 
@@ -110,4 +120,5 @@ def position_chart(cur, listing_id, accounts):
     cur.execute("select price_date, close_price, currency from prices where source = %s and listing_id = %s and price_date >= %s order by price_date",
                 (SOURCE, listing_id, start))
     rows = cur.fetchall()
-    return {"waluta": rows[-1][2] if rows else None, "ceny": [[d.isoformat(), c] for d, c, _ in rows], "transakcje": trades}
+    um = split_factors(cur, [listing_id]).get(listing_id)          # ceny w jednostkach ksiegi (splity dostawcy spoza ksiegi cofniete, migracja 0021)
+    return {"waluta": rows[-1][2] if rows else None, "ceny": [[d.isoformat(), (c * _factor(um, d)) if um else c] for d, c, _ in rows], "transakcje": trades}

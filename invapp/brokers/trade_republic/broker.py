@@ -110,4 +110,6 @@ class TradeRepublic(Broker):
 
     def pricing_steps(self, conn, provider):
         from invapp.brokers.trade_republic import pricing
-        return [("Symbole Trade Republic (ISIN → dostawca cen)", lambda: [r["status"] for r in pricing.resolve_tr_listings(conn, provider)], "quick")]
+        from invapp.pricing.history import HistoryYahoo
+        return [("Symbole Trade Republic (ISIN → dostawca cen)", lambda: [r["status"] for r in pricing.resolve_tr_listings(conn, provider)], "quick"),
+                ("Symbole historii zamkniętych pozycji Trade Republic", lambda: [r["status"] for r in pricing.resolve_closed_history(conn, HistoryYahoo())], "history")]

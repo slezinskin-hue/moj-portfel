@@ -308,6 +308,7 @@
     const h = S.hist, last = pts[pts.length - 1];
     $('#chart-note').innerHTML = !pts.length ? 'Brak danych do wykresu.' : `Od ${esc(h.series[0].date)}: wartość ${zl(last.value)}, wpłaty netto ${zl(last.invested_net)}, zysk <span class="${cls(last.gain)}">${zlS(last.gain)}</span>.` +
       (h.estimated_days ? ` <span class="warn">${h.estimated_days} z ${h.series.length} dni ma oszacowane ceny części pozycji (brak historii instrumentu).</span>` : '') +
+      (h.proxy_days ? ` <span class="muted">${h.proxy_days} dni z ceną zastępczą części pozycji (ten sam papier notowany na innej giełdzie – dla dni, w których dostawca nie ma historii tego notowania).</span>` : '') +
       (h.ppk ? ` <span class="muted">Zawiera PPK od ${esc(h.ppk.od)}: dni wpłat odtworzone z reguł PPK, wartość między wpisanymi stanami szacowana (stała stopa dopasowana do stanów).</span>` : '') +
       (S.mode === 'twr' ? '<br>TWR i indeksy pokazują zwrot <b>od pierwszego dnia widocznego okresu</b> (przybliż lub wybierz 1R, YTD…, aby porównać inny okres); pozostałe miary liczone są od początku. ' +
         'Indeksy w ' + CUR + ' (kurs dnia z Yahoo), cenowe – bez dywidend, jak TWR; WIG20 to ETF Beta WIG20TR (z dywidendami), bo Yahoo nie podaje historii samego indeksu.' +
