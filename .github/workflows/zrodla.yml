@@ -1,5 +1,6 @@
 # Codzienna kontrola: czy zewnetrzne zrodla danych (Yahoo, NBP, specyfikacja XTB, wydania GitHub) nadal odpowiadaja w formacie,
-# ktorego uzywa aplikacja, i czy testy publiczne przechodza na aktualnym obrazie systemu. Blad = e-mail z GitHuba do wlasciciela.
+# ktorego uzywa aplikacja, czy biblioteki instalatora nie maja znanych luk bezpieczenstwa (pip-audit) i czy testy publiczne
+# przechodza na aktualnym obrazie systemu. Blad = e-mail z GitHuba do wlasciciela.
 # Recznie: zakladka Actions -> "Zrodla danych" -> Run workflow.
 name: Zrodla danych
 on:
@@ -27,6 +28,20 @@ jobs:
         env:
           INVAPP_LIVE: "1"
         run: python -m unittest -v tests.test_zrodla_zewnetrzne
+
+  # znane luki bezpieczenstwa w bibliotekach wbudowanych w instalator (dokladne wersje z requirements-lock.txt; baza PyPI/OSV)
+  biblioteki:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: pip-audit
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements-lock.txt --no-deps --disable-pip --progress-spinner off
 
   testy:
     uses: ./.github/workflows/testy.yml

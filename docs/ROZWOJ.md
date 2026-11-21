@@ -35,7 +35,9 @@ więc zainstalowana aplikacja nie zobaczy „bazy nowszej niż program”.
    ```
    $env:INVAPP_LIVE = "1"; python -m unittest -v tests.test_zrodla_zewnetrzne
    ```
-   GitHub Actions uruchamia je **codziennie** razem z testami publicznymi (`.github/workflows/zrodla.yml`, „Zrodla danych”); błąd = e-mail z GitHuba.
+   GitHub Actions uruchamia je **codziennie** razem z testami publicznymi i kontrolą znanych luk bezpieczeństwa w bibliotekach
+   (`pip-audit` na `requirements-lock.txt`) – `.github/workflows/zrodla.yml`, „Zrodla danych”; błąd = e-mail z GitHuba.
+   Luka w bibliotece: podnieść wersję w `requirements-lock.txt`, testy, nowe wydanie.
    Gdy pada: usługa zmieniła format albo adres – poprawka w dostawcy (`pricing/providers.py`, `pricing/history.py`, `brokers/xtb/broker.py`)
    i nowe wydanie, zanim użytkownicy zobaczą brak cen. GitHub wyłącza zaplanowane przebiegi po 60 dniach bez zmian w repozytorium
    (wtedy: Actions → „Zrodla danych” → *Enable workflow*).

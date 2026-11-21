@@ -10,12 +10,17 @@
   const nf0 = new Intl.NumberFormat('pl-PL', {maximumFractionDigits: 0});
   // waluta prezentacji (ustawienie ⚙; serwer zwraca kwoty juz przeliczone - docs/WALUTA.md)
   const CUR = BOOT.waluta || 'PLN', SYM = BOOT.sym || 'zł';
-  const zl = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf2.format(v) + ' ' + SYM;
-  const zl0 = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf0.format(v) + ' ' + SYM;
-  const sgn = v => (v > 0 ? '+' : '');
+  // kwota, ktora po zaokragleniu do d miejsc jest zerem, to zero: bez "-0,00" i "+0,00" (tylko wyswietlanie, liczby bez zmian)
+  const zero = (v, d) => Math.abs(v) < 0.5 * Math.pow(10, -d);
+  const nz = (v, d) => zero(v, d) ? 0 : v;
+  const zl = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf2.format(nz(v, 2)) + ' ' + SYM;
+  const zl0 = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf0.format(nz(v, 0)) + ' ' + SYM;
+  const sgn = (v, d) => (v > 0 && !zero(v, d === undefined ? 2 : d) ? '+' : '');
   const zlS = v => (v === null || v === undefined) ? '—' : sgn(v) + zl(v);
-  const pct = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : sgn(v) + (v * 100).toLocaleString('pl-PL', {minimumFractionDigits: d === undefined ? 2 : d, maximumFractionDigits: d === undefined ? 2 : d}) + '%';
-  const cls = v => (v === null || v === undefined) ? '' : v >= 0 ? 'pos' : 'neg';
+  const pct = (v, d) => { if (v === null || v === undefined || isNaN(v)) return '—'; d = d === undefined ? 2 : d; const x = v * 100;
+    return sgn(x, d) + nz(x, d).toLocaleString('pl-PL', {minimumFractionDigits: d, maximumFractionDigits: d}) + '%'; };
+  // kolor: d podane = kwota zerowa po zaokragleniu bez koloru (np. kolumna Dzis w dni bez sesji)
+  const cls = (v, d) => (v === null || v === undefined) ? '' : (d !== undefined && zero(v, d)) ? '' : v >= 0 ? 'pos' : 'neg';
   const num = (v, d) => (v === null || v === undefined) ? '—' : Number(v).toLocaleString('pl-PL', {maximumFractionDigits: d === undefined ? 4 : d});
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const PAL = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)', 'var(--c6)', 'var(--c7)', 'var(--c8)', 'var(--c9)', 'var(--c10)'];
@@ -97,7 +102,7 @@
     const maxShare = Math.max(...rows.map(r => r.share || 0), 0.0001);
     tb.innerHTML = rows.map(r => {
       const id = r.listing_id, xtb = r.price_source === 'XTB_EXPORT', market = r.price_source === 'MARKET' || xtb, unit = r.price_unit === 'MINOR_1_100' ? ' (pensy)' : '', open = S.open.has(id);
-      const day = r.day_change === null || r.day_change === undefined ? '<span class="muted">—</span>' : `<span class="${cls(r.day_change)}">${zlS(r.day_change)}<span class="pp">${pct(r.day_change_pct)}</span></span>`;
+      const day = r.day_change === null || r.day_change === undefined ? '<span class="muted">—</span>' : `<span class="${cls(r.day_change, 2)}">${zlS(r.day_change)}<span class="pp">${pct(r.day_change_pct)}</span></span>`;
       return `<tr data-id="${id}" style="cursor:pointer"><td><span class="tick">${esc(r.ticker)}</span><span class="inst">${esc(r.instrument)}</span></td>
         <td>${(r.acct || '').split(', ').filter(Boolean).map(a => `<span class="badge">${esc(a)}</span>`).join(' ')}</td>
         <td class="n">${num(r.qty)}</td><td class="n">${market && r.price_pln !== null ? zl(r.price_pln) : '<span class="warn">brak ceny</span>'}</td>
@@ -108,7 +113,7 @@
         <tr class="sub" data-sub="${id}" style="${open ? '' : 'display:none'}"><td colspan="11">
           ${xtb ? `Wycena z ostatniego eksportu XTB (cena i kurs XTB${r.fx_used ? ' ' + num(r.fx_used, 4) : ''}) z ${when(r.price_time)} – ustawienie „ceny z eksportu XTB”. Po nowym zakupie lub sprzedaży (inna ilość niż w eksporcie) pozycja wraca do ceny z Yahoo.` :
             market ? `Cena na giełdzie: <b>${num(r.price, 4)} ${esc(r.currency)}${unit}</b> × ilość = ${num(r.value_native, 2)} ${esc(r.currency)}` + (r.currency !== 'PLN' ? ` · kurs ${esc(r.currency)}/PLN <b>${num(r.fx_used, 4)}</b> (${r.fx_source === 'NBP_A' ? 'NBP' : 'Yahoo'})` : '') + ` · cena z ${when(r.price_time)}${r.market_state ? ' (' + esc(r.market_state) + ')' : ''}` : '<span class="warn">Brak ceny rynkowej z API – wartość niepewna (cena z raportu brokera albo brak).</span>'}
-          ${r.prev_price_pln !== null && r.prev_price_pln !== undefined ? `<br>Dziś: cena w ${CUR} ${zl(r.price_pln)} wobec ${zl(r.prev_price_pln)} na zamknięciu ${esc(r.prev_date)} (z kursem dnia) × ${num(r.qty)} szt. = <b class="${cls(r.day_change)}">${zlS(r.day_change)}</b>` : ''}
+          ${r.prev_price_pln !== null && r.prev_price_pln !== undefined ? `<br>Dziś: cena w ${CUR} ${zl(r.price_pln)} wobec ${zl(r.prev_price_pln)} na zamknięciu ${esc(r.prev_date)} (z kursem dnia) × ${num(r.qty)} szt. = <b class="${cls(r.day_change, 2)}">${zlS(r.day_change)}</b>` : ''}
           ${r.avg_cost !== null && r.avg_cost !== undefined ? `<br>Średni koszt: ${zl(r.cost_left)} / ${num(r.qty)} szt. = <b>${zl(r.avg_cost)}</b> za sztukę (z prowizjami, po kursie z dnia zakupu)` : ''}
           ${(r.accounts || []).length > 1 ? '<br>Na kontach: ' + r.accounts.map(a => esc(a.account) + ' ' + num(a.qty) + ' szt. (' + zl(a.value) + ')').join(' · ') : ''}
           <div class="pos-chart" data-chart="${id}"></div>
@@ -610,7 +615,7 @@
     }
     $('#sim-tiles').innerHTML = `<div class="m"><div class="l">Wartość za ${years} lat</div><div class="v">${zl0(net(end))}</div><div class="s">pesymistycznie ${zl0(net(pes[pes.length - 1]))} · optymistycznie ${zl0(net(opt[opt.length - 1]))}</div></div>
       <div class="m"><div class="l">Suma wpłat</div><div class="v">${zl0(end.c)}</div><div class="s">w tym wartość startowa ${zl0(start)}</div></div>
-      <div class="m"><div class="l">Zysk</div><div class="v ${cls(net(end) - end.c)}">${sgn(net(end) - end.c) + zl0(net(end) - end.c)}</div><div class="s">${tax ? 'po podatku Belki 19% od zysku' : 'przed podatkiem (IKE/IKZE: bez Belki przy wypłacie zgodnej z zasadami)'}</div></div>
+      <div class="m"><div class="l">Zysk</div><div class="v ${cls(net(end) - end.c)}">${sgn(net(end) - end.c, 0) + zl0(net(end) - end.c)}</div><div class="s">${tax ? 'po podatku Belki 19% od zysku' : 'przed podatkiem (IKE/IKZE: bez Belki przy wypłacie zgodnej z zasadami)'}</div></div>
       <div class="m"><div class="l">W dzisiejszych pieniądzach</div><div class="v">${zl0(real)}</div><div class="s">po inflacji ${(infl * 100).toLocaleString('pl-PL')}% rocznie</div></div>` + goalTxt;
     if (!simChart) simChart = new Charts.TimeChart($('#sim-chart'), {height: 300, navigator: false, minSpan: 31 * Charts.DAY, fmtY: zl0, series: [
       {key: 'opt', label: 'Optymistyczny', color: 'var(--c4)', width: 1.5}, {key: 'pes', label: 'Pesymistyczny', color: 'var(--c5)', width: 1.5},
@@ -767,7 +772,7 @@
 
   // ---------------------------------------------------------------- PPK (core/ppk.py): stany wpisywane recznie, wynik orientacyjny
   const PAYER = {EMPLOYEE: 'Ty (pracownik)', EMPLOYER: 'pracodawca', STATE: 'państwo'};
-  const pz = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf2.format(v) + ' zł';          // PPK zawsze w PLN
+  const pz = v => (v === null || v === undefined || isNaN(v)) ? '—' : nf2.format(nz(v, 2)) + ' zł';          // PPK zawsze w PLN
   const pzS = v => (v === null || v === undefined) ? '—' : sgn(v) + pz(v);
   const dpl = s => s ? `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}` : '—';
   const amt = s => { s = String(s || '').replace(/[\s  ]|zł|PLN/gi, '').replace(',', '.'); return s === '' || isNaN(s) ? null : Number(s); };

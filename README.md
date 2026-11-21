@@ -54,13 +54,13 @@ zmianą schematu), `logi\`, `hasla_bazy.json` (losowe hasła ról bazy).
 
 Testy (dane syntetyczne):
 ```
-python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow
+python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow tests.test_pozycje tests.test_waluta tests.test_ppk tests.test_wydajnosc tests.test_zgloszenia tests.test_zrodla_zewnetrzne
 ```
 
 Dokumentacja: [docs/ZASADY.md](docs/ZASADY.md) (reguły i listy kontrolne), [docs/ARCHITEKTURA.md](docs/ARCHITEKTURA.md),
 [docs/DODAWANIE_BROKERA.md](docs/DODAWANIE_BROKERA.md) (nowy broker w kilka minut: `python -m invapp.tools.nowy_broker`),
 [docs/DODAWANIE_MODULU.md](docs/DODAWANIE_MODULU.md) (nowa zakładka / rodzaj aktywów), [docs/PPK.md](docs/PPK.md) (moduł PPK),
-[docs/INSTALATOR.md](docs/INSTALATOR.md) (instalator, wydania, aktualizacje), [docs/ROZWOJ.md](docs/ROZWOJ.md) (praca nad zmianami), [CLAUDE.md](CLAUDE.md) (skrót dla pracy z kodem).
+[docs/INSTALATOR.md](docs/INSTALATOR.md) (instalator, wydania, aktualizacje), [docs/BAZA_WBUDOWANA.md](docs/BAZA_WBUDOWANA.md) (wbudowany PostgreSQL), [docs/ROZWOJ.md](docs/ROZWOJ.md) (praca nad zmianami), [CLAUDE.md](CLAUDE.md) (skrót dla pracy z kodem).
 
 ## Zastrzeżenia
 

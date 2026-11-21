@@ -98,7 +98,9 @@ class TestBrokerContract(tm.Base):
                 for f in files:
                     if not f.endswith(".py"):
                         continue
-                    for i, line in enumerate(open(os.path.join(dirpath, f), encoding="utf-8"), 1):
+                    with open(os.path.join(dirpath, f), encoding="utf-8") as fh:
+                        lines = fh.readlines()
+                    for i, line in enumerate(lines, 1):
                         if re.search(r"""(==|!=|\bin)\s*\(?\s*["'](XTB|TR)["']""", line) or re.search(r"""(?<![a-z_])code\s*==\s*["']""", line):
                             bad.append(f"{f}:{i}: {line.strip()[:90]}")
         self.assertEqual(bad, [])
