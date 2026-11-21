@@ -75,5 +75,6 @@ Wynikają z decyzji właściciela projektu i są pilnowane testami. Jeśli zmian
 - [ ] `git status` bez plików z danymi; `tests/test_prywatnosc.py` zielony
 - [ ] dokumentacja: `docs/ARCHITEKTURA.md` (mapa / zasady), poradnik, jeśli zmienia się sposób dodawania czegoś
 
-**Przed wydaniem:** numer w `invapp/__init__.py`, opis zmian w tagu, wszystko powyżej + obie serie mutacji; po wydaniu sprawdzić
+**Przed wydaniem:** numer w `invapp/__init__.py`, opis zmian w tagu, wszystko powyżej + obie serie mutacji + źródła zewnętrzne
+(`INVAPP_LIVE=1`, `tests/test_zrodla_zewnetrzne.py`); po wydaniu sprawdzić
 wydanie na GitHubie i ofertę aktualizacji dla poprzedniej wersji.

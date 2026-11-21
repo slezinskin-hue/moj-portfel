@@ -18,10 +18,12 @@ Publiczne repozytorium (GitHub), instalator Inno Setup, aktualizacje z wydań (G
 python uruchom.py                                   # wersja ze źródeł, dane testowe %LOCALAPPDATA%\AplikacjaInwestycyjna-dev
 python -m invapp --no-browser --port 8770           # sam serwer (np. do pomiarów); --data-dir D:\proba = inne dane
 python -m invapp.tools.kopiuj_dane                  # kopia prawdziwych danych do wersji testowej (obie aplikacje zamknięte)
-python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow tests.test_pozycje tests.test_waluta tests.test_ppk tests.test_wydajnosc tests.test_zgloszenia
+python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow tests.test_pozycje tests.test_waluta tests.test_ppk tests.test_wydajnosc tests.test_zgloszenia tests.test_zrodla_zewnetrzne
 ```
 
 Testy lokalne na prawdziwych eksportach (pliki w `export/`, testy w `.gitignore`) i mutacje: `docs/ROZWOJ.md`.
+Źródła zewnętrzne (Yahoo, NBP, OMI, GitHub – prawdziwa sieć): `INVAPP_LIVE=1 python -m unittest -v tests.test_zrodla_zewnetrzne`; codziennie w GitHub Actions („Zrodla danych”).
+Stan CI i zgłoszeń: `gh run list`, `gh issue list` (gh: `%LOCALAPPDATA%\Programs\GitHubCLI\bin\gh.exe`).
 U właściciela `python` może nie być w PATH terminala – pełna ścieżka: `%LOCALAPPDATA%\Programs\Python\Python312\python.exe`.
 
 ## Twarde reguły (skrót – pełne w docs/ZASADY.md)

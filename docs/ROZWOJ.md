@@ -22,7 +22,7 @@ więc zainstalowana aplikacja nie zobaczy „bazy nowszej niż program”.
    Kopia zastępuje dane testowe; dane zainstalowanej aplikacji nie są zmieniane.
 3. **Testy automatyczne** (te same co na GitHubie):
    ```
-   python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow tests.test_pozycje tests.test_waluta tests.test_ppk tests.test_wydajnosc tests.test_zgloszenia
+   python -m unittest tests.test_metrics tests.test_omi_parser tests.test_pricing tests.test_history tests.test_deposits tests.test_ponowny_import tests.test_aktualizacje tests.test_tryby tests.test_engine_and_brokers tests.test_app_skeleton tests.test_gotowka tests.test_diagnoza tests.test_porownanie tests.test_prywatnosc tests.test_kontrakt_brokerow tests.test_pozycje tests.test_waluta tests.test_ppk tests.test_wydajnosc tests.test_zgloszenia tests.test_zrodla_zewnetrzne
    ```
    Pełny zestaw na Twoich prawdziwych eksportach (pliki w `export\`, testy lokalne – nie trafiają do repozytorium):
    ```
@@ -30,6 +30,15 @@ więc zainstalowana aplikacja nie zobaczy „bazy nowszej niż program”.
    python tests\mutation_check.py
    python tests\mutation_check_import.py
    ```
+   **Źródła zewnętrzne** (prawdziwa sieć: Yahoo – ceny, kursy, historia, indeksy, ISIN, sektory, splity; NBP; specyfikacja OMI XTB; wydanie na GitHubie –
+   instalator i suma SHA-256). Sprawdzają kształt odpowiedzi tymi samymi funkcjami, których używa program; bez `INVAPP_LIVE=1` test jest pomijany:
+   ```
+   $env:INVAPP_LIVE = "1"; python -m unittest -v tests.test_zrodla_zewnetrzne
+   ```
+   GitHub Actions uruchamia je **codziennie** razem z testami publicznymi (`.github/workflows/zrodla.yml`, „Zrodla danych”); błąd = e-mail z GitHuba.
+   Gdy pada: usługa zmieniła format albo adres – poprawka w dostawcy (`pricing/providers.py`, `pricing/history.py`, `brokers/xtb/broker.py`)
+   i nowe wydanie, zanim użytkownicy zobaczą brak cen. GitHub wyłącza zaplanowane przebiegi po 60 dniach bez zmian w repozytorium
+   (wtedy: Actions → „Zrodla danych” → *Enable workflow*).
 4. **Test instalatora** (opcjonalnie, przed wydaniem): zbuduj go lokalnie i zainstaluj na swojej zainstalowanej wersji – tak samo jak zrobi
    to aktualizacja u innych:
    ```

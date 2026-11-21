@@ -1,0 +1,32 @@
+# Codzienna kontrola: czy zewnetrzne zrodla danych (Yahoo, NBP, specyfikacja XTB, wydania GitHub) nadal odpowiadaja w formacie,
+# ktorego uzywa aplikacja, i czy testy publiczne przechodza na aktualnym obrazie systemu. Blad = e-mail z GitHuba do wlasciciela.
+# Recznie: zakladka Actions -> "Zrodla danych" -> Run workflow.
+name: Zrodla danych
+on:
+  schedule:
+    - cron: "17 6 * * *"      # codziennie ok. 7:17 czasu polskiego (zima)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zrodla:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Biblioteki (dokladne wersje)
+        run: |
+          pip install --no-deps -r requirements-lock.txt
+          pip install -r requirements-test.txt
+      - name: Zrodla zewnetrzne (prawdziwa siec)
+        env:
+          INVAPP_LIVE: "1"
+        run: python -m unittest -v tests.test_zrodla_zewnetrzne
+
+  testy:
+    uses: ./.github/workflows/testy.yml
