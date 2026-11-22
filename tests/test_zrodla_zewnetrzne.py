@@ -20,6 +20,9 @@ MAX_AGE = timedelta(days=7)          # notowanie starsze = zrodlo nie podaje swi
 
 
 RETRY_WAITS = (30, 90)               # chwilowa awaria uslugi (5xx, brak polaczenia) != zmiana formatu: ponowna proba po 30 s i 90 s
+# 404 tez bywa chwilowe: NBP 2026-11-22 (niedziela) przez kilka minut zwracal 404 dla biezacej tabeli A, a tabela z data i XML dzialaly.
+# Adres usuniety na stale nadal wywala test - po ostatniej probie.
+RETRY_CODES = (404, 429)
 
 
 def _retry(fn, *a, **kw):
@@ -29,7 +32,7 @@ def _retry(fn, *a, **kw):
         try:
             return fn(*a, **kw)
         except urllib.error.HTTPError as e:
-            if e.code < 500 and e.code != 429 or wait is None:
+            if e.code < 500 and e.code not in RETRY_CODES or wait is None:
                 raise
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             if wait is None:
